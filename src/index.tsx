@@ -5,9 +5,9 @@ import { ReactNode, useEffect, useRef, useState } from "react";
 import { FaAdjust } from "react-icons/fa";
 import { proxyOptions } from "./launchOptions";
 import { PluginInstaller, PluginArtifact } from "./pluginInstaller";
-import { canRestore, gameStatus, installReadiness, nextStep } from "./gameStatus";
-import { librarySelectable, libraryStatus } from "./libraryStatus";
-import { koCheckLine, koGuidance, koInstallReason, koLibraryView, koStatusLabel, koStatusSummary } from "./i18nKo";
+import { canRestore, gameStatus, installReadiness } from "./gameStatus";
+import { librarySelectable } from "./libraryStatus";
+import { koCheckLine, koInstallReason, koStatusLabel, koStatusSummary } from "./i18nKo";
 import { InstallSession, JobTracker } from "./installSession";
 
 declare const DeckyBackend: { callable: <A extends unknown[], R>(route: string) => (...args: A) => Promise<R>;
@@ -246,12 +246,44 @@ function watchJobs(next: Job[], expectedRevision?: number, submittedId?: string)
 }
 function getOptionValue(option: any): string {
   if (option === null || option === undefined) return "";
+  if (typeof option === "string" || typeof option === "number") return String(option);
   if (typeof option === "object") {
-    if ("data" in option) return String(option.data ?? "");
+    if ("data" in option) {
+      const d = option.data;
+      if (typeof d === "object" && d !== null && "data" in d) return String(d.data ?? "");
+      return String(d ?? "");
+    }
     if ("value" in option) return String(option.value ?? "");
+    if ("id" in option) return String(option.id ?? "");
   }
   return String(option);
 }
+
+interface SavedGameSetting {
+  variant?: string;
+  optiChannel?: string;
+  route?: string;
+  executable?: string;
+}
+
+const savedGameSettings = new Map<string, SavedGameSetting>();
+
+function getSavedSetting(gameId: string): SavedGameSetting {
+  if (!gameId) return {};
+  let s = savedGameSettings.get(gameId);
+  if (!s) {
+    s = {};
+    savedGameSettings.set(gameId, s);
+  }
+  return s;
+}
+
+function updateSavedSetting(gameId: string, patch: Partial<SavedGameSetting>) {
+  if (!gameId) return;
+  const s = getSavedSetting(gameId);
+  Object.assign(s, patch);
+}
+
 function Content() {
   const [submission, setSubmission] = useState(installSession.snapshot);
   const [overlay, setOverlay] = useState(latestOverlayStatus);
@@ -266,17 +298,13 @@ function Content() {
   const [folders, setFolders] = useState<string[]>(pendingFolders);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [dx12, setDx12] = useState(false);
-  const [variant, setVariant] = useState<string>();
-  const [optiChannel, setOptiChannel] = useState<string>();
-  const userVariantSelectedRef = useRef<boolean>(false);
-  const lastVariantGameIdRef = useRef<string | undefined>(undefined);
-  const userOptiChannelSelectedRef = useRef<boolean>(false);
-  const lastOptiChannelGameIdRef = useRef<string | undefined>(undefined);
+  const [variant, setVariant] = useState<string>(() => getSavedSetting(lastSelected).variant || "");
+  const [optiChannel, setOptiChannel] = useState<string>(() => getSavedSetting(lastSelected).optiChannel || "");
   const lastLoadedGameIdRef = useRef<string | undefined>(undefined);
   const [diagnostics, setDiagnostics] = useState(false);
-  const [discoveryNotes, setDiscoveryNotes] = useState(false);
   const [setupOptions, setSetupOptions] = useState(false);
   const [unavailableGames, setUnavailableGames] = useState(false);
+  const [discoveryNotes, setDiscoveryNotes] = useState(false);
   const [importOpen, setImportOpen] = useState(!!pendingFolders.length);
   const [launcher, setLauncher] = useState(selectedLauncher);
   const [importMessage, setImportMessage] = useState(launcherImportMessage);
@@ -309,8 +337,13 @@ function Content() {
   }, []);
   useEffect(() => {
     const changed = (id: string) => {
-      if (selectedRef.current !== id) { executableRef.current = undefined; routeRef.current = undefined; }
-      selectedRef.current = id; select(id);
+      const saved = getSavedSetting(id);
+      routeRef.current = saved.route;
+      executableRef.current = saved.executable;
+      selectedRef.current = id;
+      select(id);
+      setVariant(saved.variant || "");
+      setOptiChannel(saved.optiChannel || "");
     };
     selectionListeners.add(changed); changed(lastSelected);
     return () => { selectionListeners.delete(changed); };
@@ -367,51 +400,39 @@ function Content() {
       setGame(undefined); setDx12(false); setDiagnostics(false);
     }
     const current = data?.games.find(g => g.id === selected);
-    if (current?.managed) routeRef.current = undefined;
-    const effectiveRoute = routeRef.current || current?.route;
-    if (current?.managed || effectiveRoute !== "optiscaler") executableRef.current = undefined;
-    // This effect alone owns selection scans, including refreshes of the same
-    // selected game. Wait for the library instead of queuing a duplicate scan.
-    const requestedExecutable = executableRef.current;
-    const requestedRoute = routeRef.current;
+    const saved = selected ? getSavedSetting(selected) : {};
+    if (current?.managed) {
+      updateSavedSetting(selected, { route: undefined });
+      routeRef.current = undefined;
+    }
+    const targetRoute = !current?.managed ? (saved.route || routeRef.current || current?.route) : current?.route;
+    if (current?.managed || targetRoute !== "optiscaler") {
+      updateSavedSetting(selected, { executable: undefined });
+      executableRef.current = undefined;
+    }
+    const requestedExecutable = saved.executable || executableRef.current;
+    const requestedRoute = saved.route || routeRef.current;
     if (current && submission.pending) { setGame(current); return () => { active = false; }; }
     if (libraryLoading) return () => { active = false; };
     if (selected && current) void run(() => requestedRoute !== undefined ? details(selected, requestedExecutable, requestedRoute) : details(selected, requestedExecutable)).then(g => {
-      if (g && active && selectedRef.current === selected && executableRef.current === requestedExecutable && routeRef.current === requestedRoute) setGame(g);
+      if (g && active && selectedRef.current === selected) setGame(g);
     });
     return () => { active = false; };
   }, [selected, data?.games, libraryLoading, submission.pending]);
-  useEffect(() => {
-    if (selected !== lastVariantGameIdRef.current) {
-      lastVariantGameIdRef.current = selected;
-      userVariantSelectedRef.current = false;
-      const cur = data?.games?.find(g => g.id === selected);
-      setVariant(cur?.installed_variant || data?.model_catalog?.default);
-    }
-  }, [selected, data?.games, data?.model_catalog?.default]);
-  useEffect(() => {
-    if (game?.id === selected && game?.installed_variant && !userVariantSelectedRef.current) {
-      setVariant(game.installed_variant);
-    }
-  }, [game?.id, game?.installed_variant, selected]);
-  useEffect(() => {
-    if (selected !== lastOptiChannelGameIdRef.current) {
-      lastOptiChannelGameIdRef.current = selected;
-      userOptiChannelSelectedRef.current = false;
-      const cur = data?.games?.find(g => g.id === selected);
-      setOptiChannel(cur?.installed_optiscaler_channel || data?.optiscaler_catalog?.default);
-    }
-  }, [selected, data?.games, data?.optiscaler_catalog?.default]);
-  useEffect(() => {
-    if (game?.id === selected && game?.installed_optiscaler_channel && !userOptiChannelSelectedRef.current) {
-      setOptiChannel(game.installed_optiscaler_channel);
-    }
-  }, [game?.id, game?.installed_optiscaler_channel, selected]);
   useEffect(() => {
     const changed = (next: Job[], finished: boolean) => { setJobs(next); if (finished) void refresh(); };
     jobListeners.add(changed); setJobs(watchedJobs);
     return () => { jobListeners.delete(changed); };
   }, []);
+
+  const currentSaved = selected ? getSavedSetting(selected) : {};
+  const effectiveVariant = currentSaved.variant || variant || game?.installed_variant || data?.model_catalog?.default || "";
+  const effectiveOptiChannel = currentSaved.optiChannel || optiChannel || game?.installed_optiscaler_channel || data?.optiscaler_catalog?.default || "";
+  const effectiveRoute = !game ? undefined : !game.managed
+    ? (currentSaved.route || routeRef.current || game.route)
+    : game.route;
+  const effectiveExecutable = !game ? undefined
+    : (currentSaved.executable || executableRef.current || game.selected_executable);
 
   async function chooseRoute(nextRoute: string) {
     if (!game || game.managed || !(game.available_routes || []).includes(nextRoute)) return;
@@ -421,30 +442,32 @@ function Content() {
       if (!stopped) return;
       publishOverlayStatus(stopped);
     }
+    updateSavedSetting(id, { route: nextRoute, executable: undefined });
     routeRef.current = nextRoute;
     executableRef.current = undefined;
     setDx12(false);
     const updated = await run(() => details(id, undefined, nextRoute));
-    if (selectedRef.current !== id || routeRef.current !== nextRoute) return;
+    if (selectedRef.current !== id) return;
     if (updated) setGame(updated);
-    else { routeRef.current = undefined; setGame(undefined); }
+    else { updateSavedSetting(id, { route: undefined }); routeRef.current = undefined; setGame(undefined); }
   }
 
   async function chooseExecutable(path: string) {
-    if (!game || game.managed || game.route !== "optiscaler") return;
+    if (!game || game.managed || effectiveRoute !== "optiscaler") return;
     const id = game.id;
     if (latestOverlayStatus?.enabled) {
       const stopped = await run(() => setStatusOverlay(null, false));
       if (!stopped) return;
       publishOverlayStatus(stopped);
     }
+    updateSavedSetting(id, { executable: path });
     executableRef.current = path;
-    const requestedRoute = routeRef.current;
+    const requestedRoute = effectiveRoute;
     setDx12(false);
     const updated = await run(() => requestedRoute !== undefined ? details(id, path, requestedRoute) : details(id, path));
-    if (selectedRef.current !== id || executableRef.current !== path || routeRef.current !== requestedRoute) return;
+    if (selectedRef.current !== id) return;
     if (updated) setGame(updated);
-    else { executableRef.current = undefined; setGame(undefined); }
+    else { updateSavedSetting(id, { executable: undefined }); executableRef.current = undefined; setGame(undefined); }
   }
 
   async function importFromLauncher() {
@@ -478,25 +501,25 @@ function Content() {
   async function installOrUpdate() {
     if (!game || installSession.snapshot.pending || watchedJobs.some(j => j.state === "running")) return;
     installSession.clearError();
-    const isFsr4 = variant?.startsWith("fsr4-");
-    const currentRelease = await run(() => isFsr4 ? checkUpdates(true, variant) : checkUpdates(true));
+    const isFsr4 = effectiveVariant.startsWith("fsr4-");
+    const currentRelease = await run(() => isFsr4 ? checkUpdates(true, effectiveVariant) : checkUpdates(true));
     if (!currentRelease?.version || currentRelease.error) { setError(currentRelease?.error || "최신 릴리즈를 확인하지 못했습니다. 아래 '최신 버전 확인' 버튼을 다시 시도해 주세요."); return; }
     if (!isFsr4) setData(d => d ? { ...d, release: currentRelease } : d);
-    const targetRoute = !game.managed ? (routeRef.current || game.route) : game.route;
-    if (targetRoute === "optiscaler" && optiChannel === "nightly") {
+    const targetRoute = !game.managed ? (effectiveRoute || game.route) : game.route;
+    if (targetRoute === "optiscaler" && effectiveOptiChannel === "nightly") {
       const nightlyRelease = await run(() => checkOptiScalerNightlyUpdate(true));
       if (!nightlyRelease?.version || nightlyRelease.error) { setError(nightlyRelease?.error || "최신 OptiScaler Nightly 릴리즈를 확인하지 못했습니다."); return; }
       setData(d => d ? { ...d, optiscaler_nightly_release: nightlyRelease } : d);
     }
-    const executable = !game.managed && targetRoute === "optiscaler" ? (game.selected_executable || undefined) : undefined;
-    const requestedRoute = !game.managed ? (routeRef.current || game.route || undefined) : undefined;
+    const executable = !game.managed && targetRoute === "optiscaler" ? (effectiveExecutable || undefined) : undefined;
+    const requestedRoute = !game.managed ? (effectiveRoute || game.route || undefined) : undefined;
     const defaultOpti = game.installed_optiscaler_channel || data?.optiscaler_catalog?.default || "bundled";
-    const requestedOpti = targetRoute === "optiscaler" && optiChannel && (optiChannel !== defaultOpti || optiChannel === "nightly") ? optiChannel : undefined;
+    const requestedOpti = targetRoute === "optiscaler" && effectiveOptiChannel && (effectiveOptiChannel !== defaultOpti || effectiveOptiChannel === "nightly") ? effectiveOptiChannel : undefined;
     const p = await run(() => requestedOpti !== undefined
-      ? previewLatest(game.id, dx12, variant, executable, requestedRoute, requestedOpti)
+      ? previewLatest(game.id, dx12, effectiveVariant, executable, requestedRoute, requestedOpti)
       : requestedRoute !== undefined
-      ? previewLatest(game.id, dx12, variant, executable, requestedRoute)
-      : previewLatest(game.id, dx12, variant, executable));
+      ? previewLatest(game.id, dx12, effectiveVariant, executable, requestedRoute)
+      : previewLatest(game.id, dx12, effectiveVariant, executable));
     if (!p) return;
     openDialog(<ConfirmModal bDisableBackgroundDismiss strTitle={`업스케일러 ${game.managed || game.legacy ? "업데이트" : "설치"} (${currentRelease.version})`}
       strDescription={<div style={{ overflowWrap: "anywhere" }}>
@@ -601,7 +624,6 @@ function Content() {
   const libraryGames = (data?.games || []).map(g => game?.id === g.id ? game : g);
   const games = libraryGames.filter(librarySelectable);
   const unavailable = libraryGames.filter(g => !games.includes(g));
-  const libraryView = koLibraryView(libraryStatus(data ? libraryGames : undefined, libraryLoading, !!libraryError));
   const selectedStatus = game ? gameStatus(game) : undefined;
   const selectedJob = jobs.find(job => job.state === "running"
     && (job.gid ? job.gid === game?.id : job.game === game?.name));
@@ -610,8 +632,6 @@ function Content() {
     : selectedJob ? "업스케일러 설치 진행 중 (installation is in progress. Wait for completion before launching.)"
     : selectedStatus?.summary;
   const installState = game ? installReadiness(game, dx12) : undefined;
-  const effectiveRoute = !game ? undefined : !game.managed ? (routeRef.current || game.route) : game.route;
-  const guidance = submission.pending ? undefined : koGuidance(nextStep(game?.setup_guidance, jobs.find(job => job.state === "running")));
   const infoStyle = { fontSize: "13px", lineHeight: "1.45", overflowWrap: "anywhere" as const, whiteSpace: "pre-wrap" as const };
 
   return <div className="helixsr-decky">
@@ -632,32 +652,24 @@ function Content() {
       {!!submission.error && <PanelSectionRow><div className="helix-card" role="alert" style={{ ...infoStyle, color: "#ffb4a7" }}>
         <strong>{submission.name}: 설치를 시작할 수 없음 (Installation could not start)</strong>{"\n"}{submission.error}
       </div></PanelSectionRow>}
-      <PanelSectionRow><div className="helix-card helix-muted">{libraryView.summary}</div></PanelSectionRow>
-      {libraryView.hint && <PanelSectionRow><div className="helix-muted">{libraryView.hint}</div></PanelSectionRow>}
       {!!libraryError && <PanelSectionRow><div style={infoStyle}>{libraryError}</div></PanelSectionRow>}
-      {(data?.warnings || []).length > 0 && <PanelSectionRow><ButtonItem layout="below" onClick={() => setDiscoveryNotes(!discoveryNotes)}>
-        {discoveryNotes ? "검색 참고사항 숨기기" : `검색 참고사항 보기 (${data!.warnings.length})`}</ButtonItem></PanelSectionRow>}
-      {discoveryNotes && !!data?.warnings.length && <PanelSectionRow><div style={infoStyle}>{data.warnings.join("\n")}</div></PanelSectionRow>}
       <div className={`${selectedStatus?.installed ? "helix-installed" : ""} helix-selected`}><PanelSectionRow>
         <DropdownItem layout="below" label="게임 선택" menuLabel="감지된 게임" selectedOption={selected}
           strDefaultLabel={games.length ? "게임을 선택하세요" : libraryGames.length ? "아래 설치 불가 게임을 확인하세요" : "선택 가능한 게임이 없습니다"} disabled={busy || modalOpen || !games.length}
           rgOptions={games.map(g => ({ data: g.id, label: <span style={{ borderLeft: `3px solid ${gameStatus(g).color}`, paddingLeft: 8 }}>{g.name} · {koStatusLabel(gameStatus(g).label)}</span> }))}
-          onChange={option => chooseGame(getOptionValue(option))} />
+          onChange={option => {
+            const val = getOptionValue(option);
+            if (val) chooseGame(val);
+          }} />
       </PanelSectionRow></div>
       {game && <>
-        {!submission.pending && <PanelSectionRow><div className="helix-muted" style={{ color: selectedStatus?.color }}>{koStatusSummary(selectedSummary || "")}</div></PanelSectionRow>}
-        {guidance && <PanelSectionRow><div className="helix-card" style={infoStyle}>
-          <strong>다음 단계: {guidance.headline}</strong>
-          {guidance.steps.length > 0 && <div style={{ marginTop: 4 }}>{guidance.steps.join("\n")}</div>}
-        </div></PanelSectionRow>}
-        {guidance?.links.map(link => <PanelSectionRow key={link.url}><ButtonItem layout="below" disabled={modalOpen}
-          onClick={() => SteamClient.System.OpenInSystemBrowser(link.url)}>{link.label}</ButtonItem></PanelSectionRow>)}
+        {!submission.pending && <PanelSectionRow><div className="helix-muted" style={{ color: selectedStatus?.color, padding: "2px 4px" }}>{koStatusSummary(selectedSummary || "")}</div></PanelSectionRow>}
         {game.installation_status?.issues.map((issue, index) => <PanelSectionRow key={`${issue.code}-${index}`}><div className="helix-card" style={{ ...infoStyle, borderLeftColor: issue.blocking ? "#f1ca7e" : "#53c5d0" }}>
           <strong>{issue.title}</strong>{"\n"}{issue.reason}{"\n"}조치 방법: {issue.steps.join(" ")}
         </div></PanelSectionRow>)}
         {game.route && <PanelSectionRow>
           <DropdownItem layout="below" label="설치 방식 (경로)" menuLabel="설치 방식 선택"
-            selectedOption={routeRef.current || game.route || "direct"} strDefaultLabel="설치 방식 선택"
+            selectedOption={effectiveRoute || "direct"} strDefaultLabel="설치 방식 선택"
             disabled={disabled || !!game.managed || (game.available_routes?.length || 0) <= 1}
             rgOptions={
               game.managed
@@ -672,43 +684,55 @@ function Content() {
                       label: game.route === "direct" ? "Direct (네이티브 FSR 3.1 직접 교체 · 단일 지원)" : "OptiScaler 프록시 (DLSS/XeSS 경유 · 단일 지원)"
                     }]
             }
-            onChange={option => void chooseRoute(getOptionValue(option))} />
+            onChange={option => {
+              const val = getOptionValue(option);
+              if (val && val !== "undefined" && selected) {
+                updateSavedSetting(selected, { route: val, executable: undefined });
+                void chooseRoute(val);
+              }
+            }} />
         </PanelSectionRow>}
         {!!data?.model_catalog?.variants.length && <PanelSectionRow>
           <DropdownItem layout="below" label="업스케일러 모델" menuLabel="업스케일러 모델 선택"
-            selectedOption={variant || data.model_catalog.default} disabled={disabled}
+            selectedOption={effectiveVariant || data.model_catalog.default} disabled={disabled}
             rgOptions={data.model_catalog.variants.map(v => ({
               data: v.id,
               label: `${v.label} · ${v.id.startsWith("fsr4-") ? (v.id.includes("exact") ? "화질 우선" : "성능 우선") : "HelixSR 신경망"}`
             }))}
             onChange={option => {
               const val = getOptionValue(option);
-              if (val) {
-                userVariantSelectedRef.current = true;
+              if (val && val !== "undefined" && selected) {
+                updateSavedSetting(selected, { variant: val });
                 setVariant(val);
               }
             }} />
         </PanelSectionRow>}
         {effectiveRoute === "optiscaler" && !!data?.optiscaler_catalog?.channels.length && <PanelSectionRow>
           <DropdownItem layout="below" label="OptiScaler 빌드" menuLabel="OptiScaler 빌드 선택"
-            selectedOption={optiChannel || data.optiscaler_catalog.default} disabled={disabled}
+            selectedOption={effectiveOptiChannel || data.optiscaler_catalog.default} disabled={disabled}
             rgOptions={data.optiscaler_catalog.channels.map(c => ({
               data: c.id,
               label: c.id === "bundled" ? "OptiScaler 0.9.4 (안정 번들)" : "OptiScaler Nightly (최신 공식)"
             }))}
             onChange={option => {
               const val = getOptionValue(option);
-              if (val) {
-                userOptiChannelSelectedRef.current = true;
+              if (val && val !== "undefined" && selected) {
+                updateSavedSetting(selected, { optiChannel: val });
                 setOptiChannel(val);
               }
             }} />
         </PanelSectionRow>}
         {!game.managed && effectiveRoute === "optiscaler" && !!game.executable_choices?.length && (game.executable_choices.length > 1 || !game.executable_choices.some(choice => choice.path === game.selected_executable)) && <PanelSectionRow>
           <DropdownItem layout="below" label="게임 실행 파일" menuLabel="실제 실행되는 실행 파일 선택"
-            selectedOption={game.selected_executable} strDefaultLabel="게임 실행 파일 선택" disabled={disabled}
+            selectedOption={effectiveExecutable || game.selected_executable} strDefaultLabel="게임 실행 파일 선택" disabled={disabled}
             rgOptions={game.executable_choices!.map(choice => ({ data: choice.path, label: `${choice.path} · ${choice.dx12 ? "DX12 감지됨" : "DX12 확인 필요"}` }))}
-            onChange={option => void chooseExecutable(getOptionValue(option))} />
+            onChange={option => {
+              const val = getOptionValue(option);
+              if (val && val !== "undefined" && selected) {
+                updateSavedSetting(selected, { executable: val });
+                void chooseExecutable(val);
+              }
+            }} />
         </PanelSectionRow>}
         {game.dx12_confirmation_needed && <PanelSectionRow><ToggleField label="게임이 DirectX 12로 설정됨"
           description="게임 내 그래픽 설정에서 렌더러가 DirectX 12로 선택되어 있음을 확인합니다." checked={dx12} onChange={setDx12} disabled={disabled} /></PanelSectionRow>}
@@ -718,8 +742,14 @@ function Content() {
           onClick={() => void interact(installOrUpdate)}>{submission.pending ? "설치 시작 중… (Starting installation…)" : game.managed || game.legacy ? "이 게임의 업스케일러 업데이트 / 모델 변경" : "이 게임에 업스케일러 설치 (Install HelixSR for this game)"}</ButtonItem></PanelSectionRow></div>
         {game.managed && !game.enabled && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || game.compatibility !== "candidate" || game.installation_status?.can_modify === false}
           onClick={() => void interact(() => action("enable"))}>업스케일러 활성화</ButtonItem></PanelSectionRow>}
+        {game.managed && game.enabled && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || !canRestore(game)}
+          onClick={() => void interact(() => action("disable"))}>업스케일러 비활성화</ButtonItem></PanelSectionRow>}
+        {game.managed && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || !canRestore(game)}
+          onClick={() => void interact(() => action("remove"))}>제거 및 원본 파일 복원</ButtonItem></PanelSectionRow>}
         {game.managed && game.enabled && game.route === "optiscaler" && game.appid && <PanelSectionRow><ButtonItem layout="below" disabled={disabled}
           onClick={() => void interact(() => launchChange())}>Proton 프록시 시작 옵션 설정</ButtonItem></PanelSectionRow>}
+        {game.recovery_available && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || !!game.installation_status?.running}
+          onClick={() => void interact(() => action("recover"))}>중단된 파일 작업 복구</ButtonItem></PanelSectionRow>}
       </>}
       {jobs.slice().reverse().map(job => <PanelSectionRow key={job.id}><div className="helix-card" style={infoStyle} role="status">
         <strong>{job.game}: {job.state === "running" ? "업스케일러 준비 및 설치 중…" : job.state}</strong>{"\n"}{job.message}
@@ -730,60 +760,46 @@ function Content() {
         {diagnostics && <pre style={{ ...infoStyle, fontSize: "11px" }}>{job.log}</pre>}
       </div></PanelSectionRow>)}
       <PanelSectionRow><ButtonItem layout="below" onClick={() => void refresh()} disabled={busy || modalOpen}>라이브러리 및 상태 새로고침</ButtonItem></PanelSectionRow>
-      {!!unavailable.length && <PanelSectionRow><ButtonItem layout="below" onClick={() => setUnavailableGames(!unavailableGames)}>{unavailableGames ? "설치 불가 게임 숨기기" : `설치 불가 게임 (${unavailable.length})`}</ButtonItem></PanelSectionRow>}
-      {unavailableGames && unavailable.map(g => <PanelSectionRow key={g.id}><div className="helix-card helix-muted">{g.name}{"\n"}{g.installation_status?.issues.map(i => `${i.title}: ${i.reason}\n조치: ${i.steps.join(" ")}`).join("\n\n") || g.reasons.join("\n") || "지원되는 업스케일러가 감지되지 않았습니다"}</div></PanelSectionRow>)}
       {error && <PanelSectionRow><div role="alert" style={{ ...infoStyle, color: "#ffb4a7" }}>{error}</div></PanelSectionRow>}
     </PanelSection>
-    {game && <PanelSection title="상태 오버레이">
-      <PanelSectionRow><ToggleField label="업스케일러 상태 오버레이 표시 (실험적)"
-        description="HUD 헬퍼 및 새 세션 로그 이벤트를 모니터링합니다. 게임을 실행하기 전에 켜세요."
+    {game && <PanelSection title="고급 옵션 및 세부 진단">
+      <PanelSectionRow><ToggleField label="업스케일러 상태 오버레이 (실험적)"
+        description="HUD 헬퍼 및 새 세션 로그 이벤트를 모니터링합니다. 게임 실행 전 켜세요."
         checked={!!overlay?.enabled && overlay.game_id === game.id} disabled={busy || modalOpen}
         onChange={enabled => void run(() => routeRef.current !== undefined ? setStatusOverlay(game.id, enabled, executableRef.current, routeRef.current) : setStatusOverlay(game.id, enabled, executableRef.current)).then(value => { if (value) publishOverlayStatus(value); })} /></PanelSectionRow>
       {!!overlay?.enabled && overlay.game_id === game.id && <PanelSectionRow><div className="helix-card" style={infoStyle}>
         {overlay.overlay.label}{"\n"}{overlay.overlay.detail}{"\n\n"}
         {overlay.runtime.label}{"\n"}{overlay.runtime.detail}
       </div></PanelSectionRow>}
-    </PanelSection>}
-    {game && <PanelSection title={game.name}>
-      <PanelSectionRow><div className="helix-card" style={infoStyle}>
+      {game.route === "optiscaler" && game.appid && <>
+        {!(game.managed && game.enabled) && <PanelSectionRow><ButtonItem layout="below" disabled={disabled} onClick={() => void interact(() => launchChange())}>Proton 프록시 시작 옵션 설정</ButtonItem></PanelSectionRow>}
+        <PanelSectionRow><ButtonItem layout="below" disabled={disabled} onClick={() => void interact(() => launchChange(true))}>플러그인 시작 옵션 변경 복원</ButtonItem></PanelSectionRow>
+      </>}
+      {game.source === "Imported" && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || game.managed}
+        onClick={() => void run(() => forgetGame(game.id)).then(result => { if (result) { setData(cacheLibrary(result)); chooseGame(""); } })}>가져온 게임 폴더 목록에서 제외</ButtonItem></PanelSectionRow>}
+      {!!unavailable.length && <PanelSectionRow><ButtonItem layout="below" onClick={() => setUnavailableGames(!unavailableGames)}>{unavailableGames ? "설치 불가 게임 숨기기" : `설치 불가 게임 (${unavailable.length})`}</ButtonItem></PanelSectionRow>}
+      {unavailableGames && unavailable.map(g => <PanelSectionRow key={g.id}><div className="helix-card helix-muted">{g.name}{"\n"}{g.installation_status?.issues.map(i => `${i.title}: ${i.reason}\n조치: ${i.steps.join(" ")}`).join("\n\n") || g.reasons.join("\n") || "지원되는 업스케일러가 감지되지 않았습니다"}</div></PanelSectionRow>)}
+      {(data?.warnings || []).length > 0 && <PanelSectionRow><ButtonItem layout="below" onClick={() => setDiscoveryNotes(!discoveryNotes)}>
+        {discoveryNotes ? "검색 참고사항 숨기기" : `검색 참고사항 보기 (${data!.warnings.length})`}</ButtonItem></PanelSectionRow>}
+      {discoveryNotes && !!data?.warnings.length && <PanelSectionRow><div style={infoStyle}>{data.warnings.join("\n")}</div></PanelSectionRow>}
+      <PanelSectionRow><ButtonItem layout="below" onClick={() => setDiagnostics(!diagnostics)}>{diagnostics ? "진단 및 로그 숨기기" : "세부 진단 및 로그 보기"}</ButtonItem></PanelSectionRow>
+      {diagnostics && <PanelSectionRow><div className="helix-card" style={infoStyle}>
         출처: {game.source} · 호환성: {game.compatibility === "candidate" ? "설치 가능 (candidate)" : game.compatibility}{"\n"}
         {game.managed ? "설치된 경로" : "감지된 경로"}: {game.route === "direct" ? "네이티브 FSR 3.1 직접 교체 (Direct)" : game.route === "optiscaler" ? "OptiScaler 프록시" : "감지되지 않음"}{"\n"}
         {koStatusSummary(selectedStatus?.summary || "")}{"\n"}
         드라이브 준비 버전: {game.package_version || "이 드라이브에 준비된 패키지 없음"}{"\n"}
         설치된 모델: {game.installed_model || "미설치"}{"\n"}
         {game.route === "optiscaler" && game.installed_optiscaler ? `설치된 OptiScaler: ${game.installed_optiscaler}\n` : ""}
-        {game.reasons.join("\n")}
-      </div></PanelSectionRow>
-      {game.managed && <>
-        {game.enabled && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || !canRestore(game)}
-          onClick={() => void interact(() => action("disable"))}>업스케일러 비활성화</ButtonItem></PanelSectionRow>}
-        <PanelSectionRow><ButtonItem layout="below" disabled={disabled || !canRestore(game)} onClick={() => void interact(() => action("remove"))}>제거 및 원본 파일 복원</ButtonItem></PanelSectionRow>
-      </>}
-      {game.recovery_available && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || !!game.installation_status?.running} onClick={() => void interact(() => action("recover"))}>중단된 파일 작업 복구</ButtonItem></PanelSectionRow>}
-      {game.source === "Imported" && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || game.managed}
-        onClick={() => void run(() => forgetGame(game.id)).then(result => { if (result) { setData(cacheLibrary(result)); chooseGame(""); } })}>가져온 게임 폴더 목록에서 제외</ButtonItem></PanelSectionRow>}
-    </PanelSection>}
-    {game && <PanelSection title="OptiScaler 및 프레임 생성">
-      <PanelSectionRow><div style={infoStyle}>
-        OptiScaler 설치 여부: {game.optiscaler.present === null ? "미검사" : game.optiscaler.present ? "설치됨" : "감지된 파일 없음"}{"\n"}
-        OptiScaler 경로 설정 여부: {game.optiscaler.helix_configured ? "설정됨" : "미설정"}{"\n"}
+        대상 실행 파일: {game.main_exe || game.target || "미확인"}{"\n"}
+        OptiScaler 설치: {game.optiscaler.present === null ? "미검사" : game.optiscaler.present ? "설치됨" : "감지된 파일 없음"}{"\n"}
+        OptiScaler 경로 설정: {game.optiscaler.helix_configured ? "설정됨" : "미설정"}{"\n"}
         OptiScaler 런타임: {game.optiscaler.runtime}{"\n"}
         업스케일러 런타임: {game.helix_runtime}{"\n"}
         프레임 생성(FG): {game.framegen_summary}{"\n"}
-        {game.framegen.map(f => `${f.source} · ${f.key}: ${f.value} (${f.meaning})`).join("\n")}
-      </div></PanelSectionRow>
-      {game.route === "optiscaler" && <PanelSectionRow><div style={infoStyle}>
-        대상 실행 파일: {game.main_exe || game.target || "미확인"}{"\n"}
-        {(game.optiscaler.setup?.checks || []).map(koCheckLine).join("\n\n")}
-      </div></PanelSectionRow>}
-      {game.route === "optiscaler" && game.appid && <>
-        {!(game.managed && game.enabled) && <PanelSectionRow><ButtonItem layout="below" disabled={disabled} onClick={() => void interact(() => launchChange())}>Proton 프록시 시작 옵션 설정</ButtonItem></PanelSectionRow>}
-        <PanelSectionRow><ButtonItem layout="below" disabled={disabled} onClick={() => void interact(() => launchChange(true))}>플러그인 시작 옵션 변경 복원</ButtonItem></PanelSectionRow>
-      </>}
-      <PanelSectionRow><ButtonItem layout="below" onClick={() => setDiagnostics(!diagnostics)}>{diagnostics ? "진단 및 로그 숨기기" : "진단 및 로그 보기"}</ButtonItem></PanelSectionRow>
-      {diagnostics && <PanelSectionRow><div style={infoStyle}>
+        {game.framegen.map(f => `${f.source} · ${f.key}: ${f.value} (${f.meaning})`).join("\n")}{"\n"}
         폴더: {game.folder}{"\n"}시작 옵션: {game.launch_options || "감지되지 않음"}{"\n"}
         {(game.awareness_warnings || []).join("\n")}{"\n"}
+        {(game.optiscaler.setup?.checks || []).map(koCheckLine).join("\n\n")}{"\n"}
         {Object.entries(game.optiscaler.setup?.settings || {}).map(([key, value]) => `${key}=${value}`).join("\n")}{"\n"}
         {(game.logs || []).map(l => `${l.path}\n${new Date(l.modified * 1000).toLocaleString()}\n${l.excerpt}`).join("\n\n") || "지원되는 로그 파일 없음"}
       </div></PanelSectionRow>}

@@ -6,18 +6,17 @@
 
 ## 1. 프로젝트 개요 및 베이스라인
 
-- **플러그인 명칭**: `Upscaler-Decky` (`package.json`: `upscaler-decky`, 버전 `0.1.25`)
+- **플러그인 명칭**: `Upscaler-Decky` (`package.json`: `upscaler-decky`, 버전 `0.1.26`)
 - **업스트림 베이스**: `dawoodtogoo2020-code/HelixSR-Decky` `v0.1.21` (`a3c0d21`) 병합 완료 (패널 재마운트 시 설치 확인 및 진행 상태 보존)
 - **핵심 확장 목표**:
-  1. **드롭다운 선택 값 반영 및 상태 유지 버그 수정 (`src/index.tsx`)**:
-     - Steam Decky UI의 `DropdownItem` 콜백에서 `option.data`와 원시 값 모두 안전하게 추출하는 `getOptionValue` 도입
-     - 동일 게임 선택 상태에서 백그라운드 재조회/리렌더링 시 사용자가 수동 선택한 업스케일러 모델(`variant`) 및 OptiScaler 채널이 기본값으로 덮어씌워지던 문제 해결
-  2. **설치 방식(경로) UI 통일 및 명확화**:
-     - 단일 경로만 지원되는 게임의 경우에도 상단 드롭다운에 `Direct (단일 지원)` 또는 `OptiScaler 프록시 (단일 지원)` 형태로 명확히 배치하여 사용자가 현재 적용 방식을 직관적으로 인지할 수 있도록 개선
-     - 복수 지원 게임은 `Direct`와 `OptiScaler` 간 실시간 선택 지원
-  3. **UI 간소화 및 불필요한 설명 텍스트 제거**:
-     - Steam Deck QAM 오버레이 환경에 맞추어 드롭다운 하단의 불필요하고 긴 안내 문구(모델 설명, 빌드 설명, 실행 파일 설명 등) 전면 정리
-     - '다음 단계' 안내 카드 및 게임 세부 정보의 중복 설명 텍스트를 간결하고 직관적으로 축약
+  1. **Steam Deck 드롭다운 선택 값 유지 및 재마운트 초기화 완벽 해결 (`src/index.tsx`)**:
+     - Steam Deck QAM 특성상 드롭다운 팝업 모달이 열리고 닫힐 때 패널 컴포넌트(`Content`)가 언마운트 및 재마운트되는데, 이 과정에서 `useState`가 초기화되어 첫 번째 항목으로 되돌아가던 버그 해결
+     - 모듈 스코프의 `savedGameSettings` 영구 저장소를 도입하여 게임별 `variant`, `optiChannel`, `route`, `executable` 선택값을 저장 및 유지
+     - 드롭다운의 `selectedOption`을 `effectiveVariant`, `effectiveOptiChannel`, `effectiveRoute`, `effectiveExecutable`과 동기화하여 선택된 옵션이 UI에 정확히 유지되도록 보장
+  2. **UI 레이아웃 대폭 간소화 및 불필요한 설명 텍스트 제거**:
+     - 상단에 자리잡고 있던 거대한 요약 카드(`libraryView.summary`, `hint`) 및 10줄에 달하는 '다음 단계' 안내 카드를 전면 제거하여, 패널을 열자마자 게임 선택과 업스케일러 설정 및 설치 버튼이 한눈에 보이도록 압축
+     - 하단의 중복된 게임 카드(`PanelSection title={game.name}`) 및 OptiScaler 세부 진단 덤프를 단일 접이식 섹션인 `고급 옵션 및 세부 진단`으로 통합하여 스크롤 부담 대폭 완화
+     - '업스케일러 활성화/비활성화', '제거 및 원본 파일 복원', 'Proton 프록시 시작 옵션 설정' 버튼을 첫 번째 메인 섹션의 설치 버튼 바로 아래로 배치하여 직관적 조작 지원
   4. **OptiScaler + FSR 4 실시간 연동 정상화 (`py_modules/manager.py`, `py_modules/optiscaler_setup.py`)**:
      - FSR 4 선택 시 `OptiScaler.ini`의 `FfxDx12Path` 및 `FfxDx12SRPath`를 `HelixSR/my-fsr/amd_fidelityfx_upscaler_dx12.dll`로 직접 연결하여 OptiScaler에서 선택한 FSR 4가 실제로 동작하도록 수정
      - `setup_report`에서 HelixSR 및 FSR 4 제공자 경로를 모두 유효한 설정으로 검증
