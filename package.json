@@ -1,6 +1,6 @@
 {
   "name": "upscaler-decky",
-  "version": "0.1.27",
+  "version": "0.1.28",
   "description": "Upscaler manager for Decky Loader",
   "type": "module",
   "license": "MIT",
