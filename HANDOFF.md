@@ -6,8 +6,8 @@
 
 ## 1. 프로젝트 개요 및 베이스라인
 
-- **플러그인 명칭**: `Upscaler-Decky` (`package.json`: `upscaler-decky`, 버전 `0.1.22`)
-- **업스트림 베이스**: `dawoodtogoo2020-code/HelixSR-Decky` `v0.1.20` (`c2e750c`) 병합 완료
+- **플러그인 명칭**: `Upscaler-Decky` (`package.json`: `upscaler-decky`, 버전 `0.1.23`)
+- **업스트림 베이스**: `dawoodtogoo2020-code/HelixSR-Decky` `v0.1.21` (`a3c0d21`) 병합 완료 (패널 재마운트 시 설치 확인 및 진행 상태 보존)
 - **핵심 확장 목표**:
   1. **HelixSR + FSR 4 모델 선택 및 동시 준비 지원**:
      - 기존 HelixSR 모델 4종(`default`, `quality-6b`, `balanced-2b`, `speed-2b`) 외에
@@ -20,7 +20,9 @@
   3. **OptiScaler 빌드 채널 선택 지원 (`0.9.4 Bundled` vs `Nightly Official`)**:
      - `optiscaler` 경로 사용 시, HelixSR 패키지에 번들된 **OptiScaler 0.9.4 (`bundled`)**와 공식 나이틀리 저장소(`optiscaler/OptiScaler-nightly`)에서 최신 `.7z` 릴리즈를 받아오는 **OptiScaler Nightly (`nightly`, v10.0.0-pre1+)** 중 선택 가능
      - **OptiScaler.ini 양방향 자동 마이그레이션**: `0.9.4`와 `Nightly (v10+)` 간 전환/업데이트 시 사용자의 기존 커스텀 설정을 보존하면서 바뀐 섹션·키·값을 자동 변환
-  4. **Decky 플러그인 한국어 UI 현지화 (`src/index.tsx`, `src/i18nKo.ts`)**:
+  4. **Decky 패널 재마운트 시 설치 세션/작업 추적 보존 (`src/installSession.ts`)**:
+     - 업스트림 `v0.1.21`의 `InstallSession` 및 `JobTracker`를 도입하여 Steam Deck QAM 메뉴가 닫혔다 다시 열려도 설치 진행 상태와 피드백을 유지하고 중복 클릭 및 경쟁 상태 방지
+  5. **Decky 플러그인 한국어 UI 현지화 (`src/index.tsx`, `src/i18nKo.ts`)**:
      - Decky 플러그인의 모든 섹션, 버튼, 드롭다운, 모달, 토스트 알림 및 상태/가이드 메시지를 한국어로 현지화
 
 ---
@@ -86,7 +88,7 @@
   - 게임 상세 정보에 `설치된 모델`, `설치된 OptiScaler` 및 한국어 가이드 표시
 
 ### F. 브랜딩 및 패키징 (`package.json`, `plugin.json`, `py_modules/plugin_updates.py`, `scripts/package.py`)
-- 플러그인 폴더명 및 릴리즈 아티팩트 명칭: `Upscaler-Decky` (`Upscaler-Decky-0.1.22.zip`)
+- 플러그인 폴더명 및 릴리즈 아티팩트 명칭: `Upscaler-Decky` (`Upscaler-Decky-0.1.23.zip`)
 
 ---
 
@@ -117,4 +119,4 @@ npm run test:frontend
 ```powershell
 py scripts/package.py
 ```
-- 생성 위치: 상위 폴더(`../Upscaler-Decky-0.1.20.zip`) 및 `release/Upscaler-Decky-0.1.20.zip`
+- 생성 위치: 상위 폴더(`../Upscaler-Decky-0.1.23.zip`) 및 `release/Upscaler-Decky-0.1.23.zip`

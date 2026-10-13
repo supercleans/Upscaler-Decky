@@ -8,6 +8,7 @@ import { PluginInstaller, PluginArtifact } from "./pluginInstaller";
 import { canRestore, gameStatus, installReadiness, nextStep } from "./gameStatus";
 import { librarySelectable, libraryStatus } from "./libraryStatus";
 import { koCheckLine, koGuidance, koInstallReason, koLibraryView, koModelNote, koStatusLabel, koStatusSummary } from "./i18nKo";
+import { InstallSession, JobTracker } from "./installSession";
 
 declare const DeckyBackend: { callable: <A extends unknown[], R>(route: string) => (...args: A) => Promise<R>;
   addEventListener?: (event: string, listener: (...args: any[]) => void) => unknown;
@@ -60,12 +61,14 @@ type Game = { id: string; name: string; folder: string; source: string; compatib
 type Release = { version?: string; error?: string; checked_at?: number; page?: string };
 type ModelCatalog = { variants: { id: string; label: string; source: string }[]; default: string; note: string };
 type OptiScalerCatalog = { channels: { id: string; label: string; source: string }[]; default: string };
-type Job = { id: string; kind: string; game: string; state: string; message: string; log: string };
+type Job = { id: string; kind: string; game: string; gid?: string; state: string; message: string; log: string };
 type LauncherImport = { launcher: string; found: number; added: number; candidates: number;
   unavailable: number; game_ids: string[]; warnings: string[] };
 type Library = { games: Game[]; warnings: string[]; release: Release; license_accepted: boolean; jobs: Job[];
   launcher_import?: LauncherImport; model_catalog?: ModelCatalog;
   optiscaler_catalog?: OptiScalerCatalog; optiscaler_nightly_release?: Release };
+let cachedLibrary: Library | undefined;
+function cacheLibrary(next: Library) { cachedLibrary = next; return next; }
 type Preview = { token: string; name: string; action: string; route: string; files: string[];
   warning: string; select_upscaler: string; model?: string; variant_id?: string; release_version?: string;
   optiscaler_channel?: string; optiscaler_label?: string; optiscaler_version?: string; selected_executable?: string };
@@ -209,17 +212,22 @@ function queueFolders(next: string[]) {
   folderListeners.forEach(listener => listener(next));
 }
 let watchedJobs: Job[] = [];
+const jobTracker = new JobTracker();
+const installSession = new InstallSession();
 let jobTimer: ReturnType<typeof setInterval> | undefined;
 let jobPolling = false;
 let pluginDisposed = false;
-function watchJobs(next: Job[]) {
+function watchJobs(next: Job[], expectedRevision?: number, submittedId?: string) {
   if (pluginDisposed) return;
-  const finished = watchedJobs.some(old => old.state === "running" && next.some(j => j.id === old.id && j.state !== "running"));
+  if (!jobTracker.update(next, expectedRevision)) return;
+  next = jobTracker.jobs;
+  const finished = watchedJobs.some(old => old.state === "running" && next.some(j => j.id === old.id && j.state !== "running"))
+    || next.some(j => j.id === submittedId && j.state !== "running");
   next.forEach(j => {
     if (j.state === "running" || notifiedJobs.has(j.id)) return;
     notifiedJobs.add(j.id);
-    if (!watchedJobs.some(old => old.id === j.id && old.state === "running")) return;
-    toaster.toast({ title: j.state === "completed" ? j.kind === "install_latest" ? "업스케일러 설치 완료" : "업스케일러 준비 완료" : j.state === "cancelled" ? "작업이 취소됨" : "작업 실패",
+    if (j.id !== submittedId && !watchedJobs.some(old => old.id === j.id && old.state === "running")) return;
+    toaster.toast({ title: j.state === "completed" ? j.kind === "install_latest" ? "업스케일러 설치 완료 (HelixSR files installed)" : "업스케일러 준비 완료" : j.state === "cancelled" ? "작업이 취소됨" : "작업 실패 (HelixSR operation failed)",
       body: `${j.game}: ${j.message}${j.state === "completed" && j.kind === "install_latest" ? " 게임의 '다음 단계' 안내에 따라 시작 옵션 및 런타임 상태를 확인하세요." : ""}`, duration: 8000 });
   });
   watchedJobs = next;
@@ -229,15 +237,17 @@ function watchJobs(next: Job[]) {
     jobTimer = setInterval(() => {
       if (jobPolling) return;
       jobPolling = true;
-      void jobStatus().then(watchJobs).catch(() => {}).finally(() => { jobPolling = false; });
+      const revision = jobTracker.revision;
+      void jobStatus().then(nextJobs => watchJobs(nextJobs, revision)).catch(() => {}).finally(() => { jobPolling = false; });
     }, 2000);
   } else if (!next.some(j => j.state === "running") && jobTimer) {
     clearInterval(jobTimer); jobTimer = undefined;
   }
 }
 function Content() {
+  const [submission, setSubmission] = useState(installSession.snapshot);
   const [overlay, setOverlay] = useState(latestOverlayStatus);
-  const [data, setData] = useState<Library>();
+  const [data, setData] = useState<Library | undefined>(cachedLibrary);
   const [libraryLoading, setLibraryLoading] = useState(true);
   const [libraryError, setLibraryError] = useState("");
   const [selected, select] = useState(lastSelected);
@@ -265,6 +275,7 @@ function Content() {
   const routeRef = useRef<string | undefined>(undefined);
   selectedRef.current = selected;
 
+  useEffect(() => installSession.subscribe(setSubmission), []);
   useEffect(() => {
     overlayListeners.add(setOverlay);
     setOverlay(latestOverlayStatus);
@@ -308,6 +319,7 @@ function Content() {
     finally { setBusy(false); }
   }
   async function refresh() {
+    const jobRevision = jobTracker.revision;
     setLibraryLoading(true); setLibraryError("");
     const result = await run(async () => {
       try { return await library(); }
@@ -315,14 +327,19 @@ function Content() {
       finally { setLibraryLoading(false); }
     });
     if (result) {
-      setData(result); watchJobs(result.jobs);
+      setData(cacheLibrary(result)); watchJobs(result.jobs, jobRevision);
       if (!selectedRef.current || !result.games.some(g => g.id === selectedRef.current)) {
         const first = result.games.find(g => g.recovery_available) || result.games.find(g => g.compatibility === "candidate" && g.managed) || result.games.find(g => g.compatibility === "candidate" || g.executable_selection_needed);
         if (first) chooseGame(first.id);
       }
     }
   }
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    // A remounted panel must not insert a full discovery scan between accepting
+    // the reviewed terms and starting the job: those RPCs share a backend lock.
+    if (installSession.snapshot.pending) { setLibraryLoading(false); return; }
+    void refresh();
+  }, []);
   useEffect(() => {
     if (!data) return;
     setLibraryError("");
@@ -341,11 +358,13 @@ function Content() {
     // selected game. Wait for the library instead of queuing a duplicate scan.
     const requestedExecutable = executableRef.current;
     const requestedRoute = routeRef.current;
+    if (current && submission.pending) { setGame(current); return () => { active = false; }; }
+    if (libraryLoading) return () => { active = false; };
     if (selected && current) void run(() => requestedRoute !== undefined ? details(selected, requestedExecutable, requestedRoute) : details(selected, requestedExecutable)).then(g => {
       if (g && active && selectedRef.current === selected && executableRef.current === requestedExecutable && routeRef.current === requestedRoute) setGame(g);
     });
     return () => { active = false; };
-  }, [selected, data?.games]);
+  }, [selected, data?.games, libraryLoading, submission.pending]);
   useEffect(() => {
     setVariant(game?.installed_variant || data?.model_catalog?.default);
   }, [game?.id, game?.installed_variant, data?.model_catalog?.default]);
@@ -421,7 +440,8 @@ function Content() {
   }
 
   async function installOrUpdate() {
-    if (!game) return;
+    if (!game || installSession.snapshot.pending || watchedJobs.some(j => j.state === "running")) return;
+    installSession.clearError();
     const isFsr4 = variant?.startsWith("fsr4-");
     const currentRelease = await run(() => isFsr4 ? checkUpdates(true, variant) : checkUpdates(true));
     if (!currentRelease?.version || currentRelease.error) { setError(currentRelease?.error || "최신 릴리즈를 확인하지 못했습니다. 아래 '최신 버전 확인' 버튼을 다시 시도해 주세요."); return; }
@@ -452,12 +472,19 @@ function Content() {
       </div>}
       strOKButtonText={data?.license_accepted ? "업스케일러 설치 / 업데이트" : "약관 동의 및 설치"}
       strCancelButtonText="취소"
-      onOK={() => { if (!beginReview()) return; void run(async () => {
-        await setLicense(true, p.token);
-        const job = await installLatest(p.token);
-        watchJobs([job]);
-        setData(d => d ? { ...d, license_accepted: true } : d);
-      }).finally(() => { reviewApplying = false; finishInteraction(); }); }} />);
+      onOK={() => {
+        if (!beginReview()) return;
+        void installSession.start(game.id, p.name, async () => {
+          toaster.toast({ title: "Starting HelixSR installation", body: `${p.name}: 시작 요청을 처리 중입니다. 잠시만 기다려 주세요. 버튼을 다시 누를 필요가 없습니다.`, duration: 6000 });
+          await setLicense(true, p.token);
+          const job = await installLatest(p.token);
+          if (cachedLibrary) cachedLibrary = { ...cachedLibrary, license_accepted: true };
+          watchJobs([...watchedJobs.filter(old => old.id !== job.id), job], undefined, job.id);
+        }).then(ok => {
+          if (!ok && installSession.snapshot.error && !pluginDisposed)
+            toaster.toast({ title: "HelixSR installation could not start", body: installSession.snapshot.error, duration: 10000 });
+        }).finally(() => { reviewApplying = false; finishInteraction(); });
+      }} />);
   }
 
   async function action(name: string) {
@@ -532,14 +559,20 @@ function Content() {
     });
   }
   const running = jobs.some(x => x.state === "running");
-  const disabled = busy || running || modalOpen || !!pluginUpdate?.pending;
+  const disabled = busy || running || submission.pending || modalOpen || !!pluginUpdate?.pending;
   const libraryGames = (data?.games || []).map(g => game?.id === g.id ? game : g);
   const games = libraryGames.filter(librarySelectable);
   const unavailable = libraryGames.filter(g => !games.includes(g));
   const libraryView = koLibraryView(libraryStatus(data ? libraryGames : undefined, libraryLoading, !!libraryError));
   const selectedStatus = game ? gameStatus(game) : undefined;
+  const selectedJob = jobs.find(job => job.state === "running"
+    && (job.gid ? job.gid === game?.id : job.game === game?.name));
+  const selectedSummary = submission.pending && submission.gid === game?.id
+    ? "업스케일러 설치 시작 중… (HelixSR installation is starting…)"
+    : selectedJob ? "업스케일러 설치 진행 중 (installation is in progress. Wait for completion before launching.)"
+    : selectedStatus?.summary;
   const installState = game ? installReadiness(game, dx12) : undefined;
-  const guidance = koGuidance(nextStep(game?.setup_guidance, jobs.find(job => job.state === "running")));
+  const guidance = submission.pending ? undefined : koGuidance(nextStep(game?.setup_guidance, jobs.find(job => job.state === "running")));
   const infoStyle = { fontSize: "13px", lineHeight: "1.45", overflowWrap: "anywhere" as const, whiteSpace: "pre-wrap" as const };
 
   return <div className="helixsr-decky">
@@ -554,6 +587,12 @@ function Content() {
       .helixsr-decky .helix-muted{color:#c5d1df;font-size:12px}
       .helixsr-decky .helix-status{color:#8ee8bc}`}</style>
     <PanelSection title="게임 목록">
+      {submission.pending && <PanelSectionRow><div className="helix-card" style={infoStyle} role="status">
+        <strong>{submission.name}: 설치 시작 중… (Starting installation…)</strong>{"\n"}{submission.message}
+      </div></PanelSectionRow>}
+      {!!submission.error && <PanelSectionRow><div className="helix-card" role="alert" style={{ ...infoStyle, color: "#ffb4a7" }}>
+        <strong>{submission.name}: 설치를 시작할 수 없음 (Installation could not start)</strong>{"\n"}{submission.error}
+      </div></PanelSectionRow>}
       <PanelSectionRow><div className="helix-card helix-muted">{libraryView.summary}</div></PanelSectionRow>
       {libraryView.hint && <PanelSectionRow><div className="helix-muted">{libraryView.hint}</div></PanelSectionRow>}
       {!!libraryError && <PanelSectionRow><div style={infoStyle}>{libraryError}</div></PanelSectionRow>}
@@ -567,7 +606,7 @@ function Content() {
           onChange={option => chooseGame(String(option.data))} />
       </PanelSectionRow></div>
       {game && <>
-        <PanelSectionRow><div className="helix-muted" style={{ color: selectedStatus?.color }}>{koStatusSummary(selectedStatus?.summary || "")}</div></PanelSectionRow>
+        {!submission.pending && <PanelSectionRow><div className="helix-muted" style={{ color: selectedStatus?.color }}>{koStatusSummary(selectedSummary || "")}</div></PanelSectionRow>}
         {guidance && <PanelSectionRow><div className="helix-card" style={infoStyle}>
           <strong>다음 단계: {guidance.headline}</strong>{"\n"}
           {guidance.steps.join("\n\n")}
@@ -600,7 +639,7 @@ function Content() {
         {installState?.reason && <PanelSectionRow><div role="status" style={infoStyle}>{koInstallReason(installState.reason)}</div></PanelSectionRow>}
         {!!pluginUpdate?.pending && <PanelSectionRow><div style={infoStyle}>게임 파일을 설치하기 전에 아래 '플러그인 업데이트'에서 다운로드된 플러그인 업데이트를 완료하거나 취소해 주세요.</div></PanelSectionRow>}
         <div className="helix-primary"><PanelSectionRow><ButtonItem layout="below" disabled={disabled || !installState?.allowed}
-          onClick={() => void interact(installOrUpdate)}>{game.managed || game.legacy ? "이 게임의 업스케일러 업데이트 / 모델 변경" : "이 게임에 업스케일러 설치"}</ButtonItem></PanelSectionRow></div>
+          onClick={() => void interact(installOrUpdate)}>{submission.pending ? "설치 시작 중… (Starting installation…)" : game.managed || game.legacy ? "이 게임의 업스케일러 업데이트 / 모델 변경" : "이 게임에 업스케일러 설치 (Install HelixSR for this game)"}</ButtonItem></PanelSectionRow></div>
         {game.managed && !game.enabled && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || game.compatibility !== "candidate" || game.installation_status?.can_modify === false}
           onClick={() => void interact(() => action("enable"))}>업스케일러 활성화</ButtonItem></PanelSectionRow>}
         {game.managed && game.enabled && game.route === "optiscaler" && game.appid && <PanelSectionRow><ButtonItem layout="below" disabled={disabled}
@@ -660,7 +699,7 @@ function Content() {
       </>}
       {game.recovery_available && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || !!game.installation_status?.running} onClick={() => void interact(() => action("recover"))}>중단된 파일 작업 복구</ButtonItem></PanelSectionRow>}
       {game.source === "Imported" && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || game.managed}
-        onClick={() => void run(() => forgetGame(game.id)).then(result => { if (result) { setData(result); chooseGame(""); } })}>가져온 게임 폴더 목록에서 제외</ButtonItem></PanelSectionRow>}
+        onClick={() => void run(() => forgetGame(game.id)).then(result => { if (result) { setData(cacheLibrary(result)); chooseGame(""); } })}>가져온 게임 폴더 목록에서 제외</ButtonItem></PanelSectionRow>}
     </PanelSection>}
     {game && <PanelSection title="OptiScaler 및 프레임 생성">
       <PanelSectionRow><div style={infoStyle}>
@@ -756,7 +795,7 @@ function Content() {
       {!!folders.length && <PanelSectionRow><ButtonItem layout="below" disabled={disabled}
         onClick={() => queueFolders([])}>선택한 폴더 모두 비우기</ButtonItem></PanelSectionRow>}
       <PanelSectionRow><ButtonItem layout="below" disabled={disabled || !folders.length} onClick={() => void run(() => importFolders(folders)).then(result => {
-        if (result) { setData(result); queueFolders([]); }
+        if (result) { setData(cacheLibrary(result)); queueFolders([]); }
       })}>선택한 폴더 가져오기 ({folders.length})</ButtonItem></PanelSectionRow>
       </>}
     </PanelSection>
