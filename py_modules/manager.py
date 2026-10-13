@@ -2615,9 +2615,11 @@ class Manager:
             source = self.retained_config(rec, str((target / 'OptiScaler.ini').relative_to(root)))
             source = template if source is None else source
             from optiscaler_setup import default_dx12_upscaler, pin_config
+            ffx_rel = ('HelixSR/' + MY_FSR_DLL) if (is_fsr4 and (package_path / MY_FSR_DLL).is_file()) else 'HelixSR/helixsr.dll'
+            ffx_sr_rel = ('HelixSR/' + MY_FSR_DLL) if (is_fsr4 and (package_path / MY_FSR_DLL).is_file()) else 'HelixSR/helixsr_upscaler.dll'
             settings = [('Dx12Upscaler', default_dx12_upscaler(template)),
-                        ('FfxDx12Path', 'Z:' + str(target / 'HelixSR/helixsr.dll').replace('/', '\\')),
-                        ('FfxDx12SRPath', 'Z:' + str(target / 'HelixSR/helixsr_upscaler.dll').replace('/', '\\'))]
+                        ('FfxDx12Path', 'Z:' + str(target / ffx_rel).replace('/', '\\')),
+                        ('FfxDx12SRPath', 'Z:' + str(target / ffx_sr_rel).replace('/', '\\'))]
             if (package_path / 'amd-fsr' / AMD_FG).is_file():
                 settings.append(('FfxDx12FGPath', 'Z:' + str(target / 'HelixSR' / AMD_FG).replace('/', '\\')))
             configured_source = pin_config(source, template, settings)

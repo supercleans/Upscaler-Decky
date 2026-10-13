@@ -6,24 +6,27 @@
 
 ## 1. 프로젝트 개요 및 베이스라인
 
-- **플러그인 명칭**: `Upscaler-Decky` (`package.json`: `upscaler-decky`, 버전 `0.1.23`)
+- **플러그인 명칭**: `Upscaler-Decky` (`package.json`: `upscaler-decky`, 버전 `0.1.24`)
 - **업스트림 베이스**: `dawoodtogoo2020-code/HelixSR-Decky` `v0.1.21` (`a3c0d21`) 병합 완료 (패널 재마운트 시 설치 확인 및 진행 상태 보존)
 - **핵심 확장 목표**:
-  1. **HelixSR + FSR 4 모델 선택 및 동시 준비 지원**:
-     - 기존 HelixSR 모델 4종(`default`, `quality-6b`, `balanced-2b`, `speed-2b`) 외에
-     - `zgauthier2000/fsr4-shader-performance-overrides` 저장소의 공식 릴리즈(`fsr4.1.1-igpu-cyboman.zip`)에서 제공하는 **FSR 4.1.1 iGPU 셰이더 오버라이드 2종**(`fsr4-igpu-exact`, `fsr4-igpu-lossy`)을 선택하여 다운로드 및 적용 가능
-     - `fsr4.1.1-igpu-cyboman.zip` 준비 시 **`Exact`와 `Lossy` 두 가지 패키지를 동시에 빌드·캐싱**하여 재다운로드 없이 즉시 교체 가능
-  2. **적용 방식(Integration Route) 사용자 선택 지원**:
-     - 네이티브 FidelityFX DX12 업스케일러 DLL을 보유한 게임에서도 사용자가 **`direct`(직접 DLL 교체)** 또는 **`optiscaler`(OptiScaler 프록시 경유)** 방식을 직접 선택 가능
-     - `direct` 경로 + FSR 4 선택 시: 게임의 `amd_fidelityfx_upscaler_dx12.dll`을 선택한 FSR 4 DLL로 백업 후 직접 교체
-     - `optiscaler` 경로 + FSR 4 선택 시: HelixSR과 함께 `HelixSR/my-fsr/amd_fidelityfx_upscaler_dx12.dll`에 선택한 FSR 4 DLL(`Exact` 또는 `Lossy`)을 배치하고 인게임 `Insert` 메뉴(`Upscaling → Upscalers → FFX Upscaler`)에서 HelixSR과 FSR 4를 실시간으로 전환 가능
-  3. **OptiScaler 빌드 채널 선택 지원 (`0.9.4 Bundled` vs `Nightly Official`)**:
-     - `optiscaler` 경로 사용 시, HelixSR 패키지에 번들된 **OptiScaler 0.9.4 (`bundled`)**와 공식 나이틀리 저장소(`optiscaler/OptiScaler-nightly`)에서 최신 `.7z` 릴리즈를 받아오는 **OptiScaler Nightly (`nightly`, v10.0.0-pre1+)** 중 선택 가능
-     - **OptiScaler.ini 양방향 자동 마이그레이션**: `0.9.4`와 `Nightly (v10+)` 간 전환/업데이트 시 사용자의 기존 커스텀 설정을 보존하면서 바뀐 섹션·키·값을 자동 변환
-  4. **Decky 패널 재마운트 시 설치 세션/작업 추적 보존 (`src/installSession.ts`)**:
-     - 업스트림 `v0.1.21`의 `InstallSession` 및 `JobTracker`를 도입하여 Steam Deck QAM 메뉴가 닫혔다 다시 열려도 설치 진행 상태와 피드백을 유지하고 중복 클릭 및 경쟁 상태 방지
-  5. **Decky 플러그인 한국어 UI 현지화 (`src/index.tsx`, `src/i18nKo.ts`)**:
-     - Decky 플러그인의 모든 섹션, 버튼, 드롭다운, 모달, 토스트 알림 및 상태/가이드 메시지를 한국어로 현지화
+  1. **통합 UI 배치 (게임 설정 및 설치 섹션 상단화)**:
+     - 게임 선택 직후 `설치 방식 (경로)`, `업스케일러 모델`, `OptiScaler 빌드`를 한눈에 볼 수 있도록 설치 버튼 바로 위로 재배치
+     - 단일 경로만 지원되는 게임의 경우에도 현재 지정된 경로 및 사유를 안내 카드로 명확히 표시
+     - 설치 전/후 어떤 방식과 모델이 적용되는지 직관적으로 확인 가능
+  2. **OptiScaler + FSR 4 실시간 연동 정상화 (`py_modules/manager.py`, `py_modules/optiscaler_setup.py`)**:
+     - FSR 4 선택 시 `OptiScaler.ini`의 `FfxDx12Path` 및 `FfxDx12SRPath`를 `HelixSR/my-fsr/amd_fidelityfx_upscaler_dx12.dll`로 직접 연결하여 OptiScaler에서 선택한 FSR 4가 실제로 동작하도록 수정
+     - `setup_report`에서 HelixSR 및 FSR 4 제공자 경로를 모두 유효한 설정으로 검증
+  3. **HelixSR + FSR 4 모델 선택 및 동시 준비 지원**:
+     - 기존 HelixSR 모델 외에 `FSR 4.1.1 iGPU Exact` 및 `Lossy` 2종 선택 지원
+     - FSR 4 패키지 준비 시 Exact와 Lossy를 동시 빌드·캐싱하여 즉시 전환 지원
+  4. **적용 방식(Integration Route) 사용자 선택 지원**:
+     - `direct`(직접 교체) 및 `optiscaler`(OptiScaler 프록시) 선택 지원
+  5. **OptiScaler 빌드 채널 선택 지원 (`0.9.4 Bundled` vs `Nightly Official`)**:
+     - `0.9.4`와 `Nightly (v10+)` 간 전환/업데이트 시 `OptiScaler.ini` 양방향 자동 마이그레이션
+  6. **Decky 패널 재마운트 시 설치 세션/작업 추적 보존 (`src/installSession.ts`)**:
+     - 업스트림 `v0.1.21`의 `InstallSession` 및 `JobTracker` 도입으로 패널 재마운트 시 상태 손실 및 중복 설치 방지
+  7. **Decky 플러그인 한국어 UI 현지화 (`src/index.tsx`, `src/i18nKo.ts`)**:
+     - Decky 플러그인의 모든 UI 텍스트, 모달, 토스트 알림을 한국어로 현지화
 
 ---
 
@@ -88,7 +91,7 @@
   - 게임 상세 정보에 `설치된 모델`, `설치된 OptiScaler` 및 한국어 가이드 표시
 
 ### F. 브랜딩 및 패키징 (`package.json`, `plugin.json`, `py_modules/plugin_updates.py`, `scripts/package.py`)
-- 플러그인 폴더명 및 릴리즈 아티팩트 명칭: `Upscaler-Decky` (`Upscaler-Decky-0.1.23.zip`)
+- 플러그인 폴더명 및 릴리즈 아티팩트 명칭: `Upscaler-Decky` (`Upscaler-Decky-0.1.24.zip`)
 
 ---
 
@@ -119,4 +122,4 @@ npm run test:frontend
 ```powershell
 py scripts/package.py
 ```
-- 생성 위치: 상위 폴더(`../Upscaler-Decky-0.1.23.zip`) 및 `release/Upscaler-Decky-0.1.23.zip`
+- 생성 위치: 상위 폴더(`../Upscaler-Decky-0.1.24.zip`) 및 `release/Upscaler-Decky-0.1.24.zip`

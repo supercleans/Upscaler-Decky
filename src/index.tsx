@@ -446,15 +446,16 @@ function Content() {
     const currentRelease = await run(() => isFsr4 ? checkUpdates(true, variant) : checkUpdates(true));
     if (!currentRelease?.version || currentRelease.error) { setError(currentRelease?.error || "최신 릴리즈를 확인하지 못했습니다. 아래 '최신 버전 확인' 버튼을 다시 시도해 주세요."); return; }
     if (!isFsr4) setData(d => d ? { ...d, release: currentRelease } : d);
-    if (game.route === "optiscaler" && optiChannel === "nightly") {
+    const targetRoute = !game.managed ? (routeRef.current || game.route) : game.route;
+    if (targetRoute === "optiscaler" && optiChannel === "nightly") {
       const nightlyRelease = await run(() => checkOptiScalerNightlyUpdate(true));
       if (!nightlyRelease?.version || nightlyRelease.error) { setError(nightlyRelease?.error || "최신 OptiScaler Nightly 릴리즈를 확인하지 못했습니다."); return; }
       setData(d => d ? { ...d, optiscaler_nightly_release: nightlyRelease } : d);
     }
-    const executable = !game.managed && game.route === "optiscaler" ? game.selected_executable : undefined;
-    const requestedRoute = !game.managed ? routeRef.current : undefined;
+    const executable = !game.managed && targetRoute === "optiscaler" ? (game.selected_executable || undefined) : undefined;
+    const requestedRoute = !game.managed ? (routeRef.current || game.route || undefined) : undefined;
     const defaultOpti = game.installed_optiscaler_channel || data?.optiscaler_catalog?.default || "bundled";
-    const requestedOpti = game.route === "optiscaler" && optiChannel && (optiChannel !== defaultOpti || optiChannel === "nightly") ? optiChannel : undefined;
+    const requestedOpti = targetRoute === "optiscaler" && optiChannel && (optiChannel !== defaultOpti || optiChannel === "nightly") ? optiChannel : undefined;
     const p = await run(() => requestedOpti !== undefined
       ? previewLatest(game.id, dx12, variant, executable, requestedRoute, requestedOpti)
       : requestedRoute !== undefined
@@ -465,6 +466,7 @@ function Content() {
       strDescription={<div style={{ overflowWrap: "anywhere" }}>
         <p>{p.name}: {p.warning}</p>
         <p>선택한 모델: {p.model} · 릴리즈 버전: {p.release_version}</p>
+        <p>설치 방식 (경로): {p.route === "direct" ? "네이티브 FSR 3.1 직접 교체 (Direct)" : "OptiScaler 프록시"}</p>
         {p.optiscaler_label && <p>OptiScaler 빌드: {p.optiscaler_label} ({p.optiscaler_version})</p>}
         {p.selected_executable && <p>게임 실행 파일: {p.selected_executable}</p>}
         <p>필요한 다운로드와 로컬 패키지 준비가 자동으로 진행됩니다. HelixSR 프리웨어, NVIDIA DLSS, FSR 4 셰이더 오버라이드 및 OptiScaler가 각 라이선스 조건에 따라 사용되며, 로컬에서 생성된 네트워크 파일은 이 기기 내부에만 보관됩니다.</p>
@@ -572,6 +574,7 @@ function Content() {
     : selectedJob ? "업스케일러 설치 진행 중 (installation is in progress. Wait for completion before launching.)"
     : selectedStatus?.summary;
   const installState = game ? installReadiness(game, dx12) : undefined;
+  const effectiveRoute = !game ? undefined : !game.managed ? (routeRef.current || game.route) : game.route;
   const guidance = submission.pending ? undefined : koGuidance(nextStep(game?.setup_guidance, jobs.find(job => job.state === "running")));
   const infoStyle = { fontSize: "13px", lineHeight: "1.45", overflowWrap: "anywhere" as const, whiteSpace: "pre-wrap" as const };
 
@@ -619,7 +622,7 @@ function Content() {
         </div></PanelSectionRow>)}
         {!game.managed && (game.available_routes?.length || 0) > 1 && <>
           <PanelSectionRow><DropdownItem layout="below" label="설치 방식 (경로)" menuLabel="설치 방식 선택"
-            selectedOption={game.route || "direct"} strDefaultLabel="설치 방식 선택" disabled={disabled}
+            selectedOption={routeRef.current || game.route || "direct"} strDefaultLabel="설치 방식 선택" disabled={disabled}
             rgOptions={game.available_routes!.map(r => ({
               data: r,
               label: r === "direct" ? "네이티브 FSR 3.1 DLL 직접 교체 (Direct)" : "OptiScaler 프록시 (DLSS/XeSS/FSR2 경유)"
@@ -627,7 +630,35 @@ function Content() {
             onChange={option => void chooseRoute(String(option.data))} /></PanelSectionRow>
           <PanelSectionRow><div className="helix-muted">네이티브 FSR 3.1 DLL과 OptiScaler 입력 DLL이 모두 감지되었습니다. 네이티브 FSR 3.1 DLL을 직접 교체할지, OptiScaler 프록시(인게임 실시간 전환 지원)로 설치할지 선택하세요.</div></PanelSectionRow>
         </>}
-        {!game.managed && game.route === "optiscaler" && !!game.executable_choices?.length && (game.executable_choices.length > 1 || !game.executable_choices.some(choice => choice.path === game.selected_executable)) && <>
+        {!game.managed && (game.available_routes?.length || 0) <= 1 && <PanelSectionRow><div className="helix-card" style={infoStyle}>
+          <strong>설치 방식 (경로): {game.route === "direct" ? "네이티브 FSR 3.1 직접 교체 (Direct)" : game.route === "optiscaler" ? "OptiScaler 프록시 (DLSS/XeSS 경유)" : "감지되지 않음"}</strong>{"\n"}
+          {game.route === "direct" ? "이 게임은 네이티브 FSR 3.1 DLL이 감지되어 다이렉트 교체 방식으로 지정되었습니다." : "이 게임은 감지된 입력에 맞춰 OptiScaler 프록시 방식으로 지정되었습니다."}
+        </div></PanelSectionRow>}
+        {game.managed && <PanelSectionRow><div className="helix-card" style={infoStyle}>
+          <strong>현재 설치된 방식 (경로): {game.route === "direct" ? "네이티브 FSR 3.1 직접 교체 (Direct)" : "OptiScaler 프록시"}</strong>{"\n"}
+          설치 방식을 변경하려면 아래 게임 상세에서 '제거 및 원본 파일 복원'을 먼저 실행해 주세요.
+        </div></PanelSectionRow>}
+        {!!data?.model_catalog?.variants.length && <>
+          <PanelSectionRow><DropdownItem layout="below" label="업스케일러 모델" menuLabel="업스케일러 모델 선택"
+            selectedOption={variant || data.model_catalog.default} disabled={disabled}
+            rgOptions={data.model_catalog.variants.map(v => ({
+              data: v.id,
+              label: `${v.label} · ${v.id.startsWith("fsr4-") ? "FSR 4.1.1 셰이더" : "HelixSR 신경망"}`
+            }))}
+            onChange={option => setVariant(String(option.data))} /></PanelSectionRow>
+          <PanelSectionRow><div className="helix-muted">{koModelNote(data.model_catalog.note)}</div></PanelSectionRow>
+        </>}
+        {effectiveRoute === "optiscaler" && !!data?.optiscaler_catalog?.channels.length && <>
+          <PanelSectionRow><DropdownItem layout="below" label="OptiScaler 빌드" menuLabel="OptiScaler 빌드 선택"
+            selectedOption={optiChannel || data.optiscaler_catalog.default} disabled={disabled}
+            rgOptions={data.optiscaler_catalog.channels.map(c => ({
+              data: c.id,
+              label: c.id === "bundled" ? "OptiScaler 0.9.4 (안정 번들 버전)" : "OptiScaler Nightly (공식 최신 v10+)"
+            }))}
+            onChange={option => setOptiChannel(String(option.data))} /></PanelSectionRow>
+          <PanelSectionRow><div className="helix-muted">기본 번들된 안정 버전(OptiScaler 0.9.4)과 공식 최신 나이틀리 빌드 중 선택합니다. 전환 시 OptiScaler.ini 설정이 자동 마이그레이션됩니다.</div></PanelSectionRow>
+        </>}
+        {!game.managed && effectiveRoute === "optiscaler" && !!game.executable_choices?.length && (game.executable_choices.length > 1 || !game.executable_choices.some(choice => choice.path === game.selected_executable)) && <>
           <PanelSectionRow><DropdownItem layout="below" label="게임 실행 파일" menuLabel="실제 실행되는 실행 파일 선택"
             selectedOption={game.selected_executable} strDefaultLabel="게임 실행 파일 선택" disabled={disabled}
             rgOptions={game.executable_choices!.map(choice => ({ data: choice.path, label: `${choice.path} · ${choice.dx12 ? "DX12 감지됨" : "DX12 확인 필요"}` }))}
@@ -679,18 +710,6 @@ function Content() {
         {game.route === "optiscaler" && game.installed_optiscaler ? `설치된 OptiScaler: ${game.installed_optiscaler}\n` : ""}
         {game.reasons.join("\n")}
       </div></PanelSectionRow>
-      {!!data?.model_catalog?.variants.length && <>
-        <PanelSectionRow><DropdownItem label="업스케일러 모델" rgOptions={data.model_catalog.variants.map(v => ({ label: `${v.label} · ${v.source}`, data: v.id }))}
-          selectedOption={variant || data.model_catalog.default} disabled={disabled}
-          onChange={option => setVariant(String(option.data))} /></PanelSectionRow>
-        <PanelSectionRow><div className="helix-muted">{koModelNote(data.model_catalog.note)}</div></PanelSectionRow>
-      </>}
-      {game.route === "optiscaler" && !!data?.optiscaler_catalog?.channels.length && <>
-        <PanelSectionRow><DropdownItem label="OptiScaler 빌드" rgOptions={data.optiscaler_catalog.channels.map(c => ({ label: `${c.label} · ${c.source}`, data: c.id }))}
-          selectedOption={optiChannel || data.optiscaler_catalog.default} disabled={disabled}
-          onChange={option => setOptiChannel(String(option.data))} /></PanelSectionRow>
-        <PanelSectionRow><div className="helix-muted">기본 번들된 안정 버전(OptiScaler 0.9.4)과 공식 OptiScaler Nightly 최신 빌드 중 선택할 수 있으며, 전환 시 OptiScaler.ini 설정이 자동으로 마이그레이션됩니다.</div></PanelSectionRow>
-      </>}
       <PanelSectionRow><div className="helix-muted">다운로드, 필수 의존성 준비 및 로컬 네트워크 빌드가 자동으로 처리됩니다. 본인 소유의 게임 폴더에는 관리자 권한이 필요하지 않습니다.</div></PanelSectionRow>
       {game.managed && <>
         {game.enabled && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || !canRestore(game)}

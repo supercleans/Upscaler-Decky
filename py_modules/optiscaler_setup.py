@@ -264,7 +264,12 @@ def setup_report(target, route, options, proxy_files=()):
     values, error = configuration(directory / 'OptiScaler.ini') if directory else ({}, 'No target folder detected')
     expected = {key: 'Z:' + str(directory / 'HelixSR' / name).replace('/', '\\')
                 for key, name in [('FfxDx12Path', 'helixsr.dll'), ('FfxDx12SRPath', 'helixsr_upscaler.dll')]} if directory else {}
-    paths_match = bool(expected) and all(values.get(k, '').strip('"\'') == v for k, v in expected.items())
+    expected_fsr4 = {key: 'Z:' + str(directory / 'HelixSR/my-fsr/amd_fidelityfx_upscaler_dx12.dll').replace('/', '\\')
+                     for key in ('FfxDx12Path', 'FfxDx12SRPath')} if directory else {}
+    paths_match = bool(directory) and (
+        (bool(expected) and all(values.get(k, '').strip('"\'') == v for k, v in expected.items()))
+        or (bool(expected_fsr4) and all(values.get(k, '').strip('"\'') == v for k, v in expected_fsr4.items()))
+    )
     is_nightly_schema = 'UseFakenvapi' in values and 'OverrideNvapiDll' not in values
     valid_backends = ('fsr31', 'ffx') if is_nightly_schema else ('fsr31', 'ffx')
     configured = route == 'optiscaler' and values.get('Dx12Upscaler', '').lower() in valid_backends and paths_match and not error
