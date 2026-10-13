@@ -6,7 +6,7 @@
 
 ## 1. 프로젝트 개요 및 베이스라인
 
-- **플러그인 명칭**: `Upscaler-Decky` (`package.json`: `upscaler-decky`, 버전 `0.1.21`)
+- **플러그인 명칭**: `Upscaler-Decky` (`package.json`: `upscaler-decky`, 버전 `0.1.22`)
 - **업스트림 베이스**: `dawoodtogoo2020-code/HelixSR-Decky` `v0.1.20` (`c2e750c`) 병합 완료
 - **핵심 확장 목표**:
   1. **HelixSR + FSR 4 모델 선택 및 동시 준비 지원**:
@@ -20,6 +20,8 @@
   3. **OptiScaler 빌드 채널 선택 지원 (`0.9.4 Bundled` vs `Nightly Official`)**:
      - `optiscaler` 경로 사용 시, HelixSR 패키지에 번들된 **OptiScaler 0.9.4 (`bundled`)**와 공식 나이틀리 저장소(`optiscaler/OptiScaler-nightly`)에서 최신 `.7z` 릴리즈를 받아오는 **OptiScaler Nightly (`nightly`, v10.0.0-pre1+)** 중 선택 가능
      - **OptiScaler.ini 양방향 자동 마이그레이션**: `0.9.4`와 `Nightly (v10+)` 간 전환/업데이트 시 사용자의 기존 커스텀 설정을 보존하면서 바뀐 섹션·키·값을 자동 변환
+  4. **Decky 플러그인 한국어 UI 현지화 (`src/index.tsx`, `src/i18nKo.ts`)**:
+     - Decky 플러그인의 모든 섹션, 버튼, 드롭다운, 모달, 토스트 알림 및 상태/가이드 메시지를 한국어로 현지화
 
 ---
 
@@ -77,14 +79,14 @@
 - `main.py` & `desktop/backend.py`:
   - `check_fsr4_update`, `check_optiscaler_nightly_update` 노출
   - `preview_latest`, `preview_action`, `prepare`에 `variant_id`, `route`, `optiscaler_channel` 전달
-- `src/index.tsx` (Decky 플러그인 React UI) & `desktop/app.py` (데스크톱 PySide6 UI):
-  - **Integration route** 선택 드롭다운 (`Direct FidelityFX DLL replacement` / `OptiScaler proxy`)
-  - **Upscaler model** 선택 드롭다운 (HelixSR 4종 + FSR 4 2종)
-  - **OptiScaler build** 선택 드롭다운 (`route === 'optiscaler'`일 때 표시: `OptiScaler 0.9.4 (Bundled)` / `OptiScaler Nightly (Official)`)
-  - 게임 상세 정보에 `Installed model`, `Installed OptiScaler` 표시
+- `src/index.tsx` & `src/i18nKo.ts` (Decky 플러그인 한국어 React UI) & `desktop/app.py` (데스크톱 PySide6 UI):
+  - **설치 방식 (경로)** 선택 드롭다운 (`네이티브 FSR 3.1 DLL 직접 교체 (Direct)` / `OptiScaler 프록시 (DLSS/XeSS/FSR2 경유)`)
+  - **업스케일러 모델** 선택 드롭다운 (HelixSR + FSR 4 2종)
+  - **OptiScaler 빌드** 선택 드롭다운 (`route === 'optiscaler'`일 때 표시: `OptiScaler 0.9.4 (Bundled)` / `OptiScaler Nightly (Official)`)
+  - 게임 상세 정보에 `설치된 모델`, `설치된 OptiScaler` 및 한국어 가이드 표시
 
 ### F. 브랜딩 및 패키징 (`package.json`, `plugin.json`, `py_modules/plugin_updates.py`, `scripts/package.py`)
-- 플러그인 폴더명 및 릴리즈 아티팩트 명칭: `Upscaler-Decky` (`Upscaler-Decky-0.1.21.zip`)
+- 플러그인 폴더명 및 릴리즈 아티팩트 명칭: `Upscaler-Decky` (`Upscaler-Decky-0.1.22.zip`)
 
 ---
 

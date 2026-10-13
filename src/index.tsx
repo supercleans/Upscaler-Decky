@@ -7,6 +7,7 @@ import { proxyOptions } from "./launchOptions";
 import { PluginInstaller, PluginArtifact } from "./pluginInstaller";
 import { canRestore, gameStatus, installReadiness, nextStep } from "./gameStatus";
 import { librarySelectable, libraryStatus } from "./libraryStatus";
+import { koCheckLine, koGuidance, koInstallReason, koLibraryView, koModelNote, koStatusLabel, koStatusSummary } from "./i18nKo";
 
 declare const DeckyBackend: { callable: <A extends unknown[], R>(route: string) => (...args: A) => Promise<R>;
   addEventListener?: (event: string, listener: (...args: any[]) => void) => unknown;
@@ -30,7 +31,7 @@ function publishPluginStatus(status: PluginUpdate) {
   pluginUpdateListeners.forEach(listener => listener(status));
   if (status.update_available && !status.error && status.latest_version !== notifiedPluginVersion) {
     notifiedPluginVersion = status.latest_version || "";
-    toaster.toast({ title: "HelixSR Decky update available", body: `Plugin ${status.latest_version} is ready. Open Plugin updates to review it.`, duration: 6000 });
+    toaster.toast({ title: "Upscaler Decky 업데이트 가능", body: `플러그인 ${status.latest_version} 버전이 준비되었습니다. '플러그인 업데이트' 섹션에서 확인하세요.`, duration: 6000 });
   }
 }
 function pollPluginStatus() {
@@ -100,7 +101,7 @@ function publishOverlayStatus(status: OverlayStatus) {
   const key = `${status.game_id}:${status.runtime.state}:${status.overlay.state}`;
   if (key !== overlayNotificationKey && (["output", "failure", "unavailable"].includes(status.runtime.state)
       || ["conflict", "unavailable", "stale"].includes(status.overlay.state))) {
-    toaster.toast({ title: "HelixSR status", body: `${status.runtime.label}. ${status.overlay.label}.`, duration: 6000 });
+    toaster.toast({ title: "업스케일러 상태", body: `${status.runtime.label}. ${status.overlay.label}.`, duration: 6000 });
   }
   overlayNotificationKey = key;
 }
@@ -109,8 +110,8 @@ function pollOverlayStatus() {
   overlayPolling = true;
   void overlayStatus().then(publishOverlayStatus).catch(() => {
     if (latestOverlayStatus?.enabled) publishOverlayStatus({ ...latestOverlayStatus,
-      runtime: {state: "unavailable", label: "Runtime status unavailable", detail: "Backend connection lost. Toggle off and on after it reconnects."},
-      overlay: {state: "stale", label: "Overlay health unverified", detail: "No current backend response.", responding: false, visible_verified: false} });
+      runtime: {state: "unavailable", label: "런타임 상태 확인 불가", detail: "백엔드 연결이 끊어졌습니다. 다시 연결된 후 스위치를 껐다 켜주세요."},
+      overlay: {state: "stale", label: "오버레이 상태 미확인", detail: "백엔드 응답이 없습니다.", responding: false, visible_verified: false} });
   }).finally(() => { overlayPolling = false; });
 }
 type LaunchIntent = { nonce: string; before: string; after: string; restore: boolean };
@@ -120,7 +121,7 @@ const ownedLaunch = callable<[string, string], { before: string; after: string; 
 
 async function liveLaunchOptions(appid: number): Promise<string> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { subscription?.unregister(); reject(new Error("Steam did not provide live launch options")); }, 5000);
+    const timer = setTimeout(() => { subscription?.unregister(); reject(new Error("Steam에서 실시간 시작 옵션을 가져오지 못했습니다")); }, 5000);
     let subscription: { unregister(): void } | undefined;
     subscription = SteamClient.Apps.RegisterForAppDetails(appid, detail => {
       clearTimeout(timer); subscription?.unregister(); resolve(detail.strLaunchOptions);
@@ -144,7 +145,7 @@ let interactionAfter = 0;
 const interactionListeners = new Set<() => void>();
 const pluginInstaller = new PluginInstaller(async (route, ...args) => {
   if (typeof DeckyBackend === "undefined" || typeof DeckyBackend.callable !== "function")
-    throw new Error("Decky's installer is unavailable. Install the release ZIP through Decky Settings → Developer.");
+    throw new Error("Decky 설치기를 사용할 수 없습니다. Decky 설정 → 개발자 메뉴에서 릴리즈 ZIP 파일로 설치해 주세요.");
   return DeckyBackend.callable<unknown[], unknown>(route)(...args);
 }, () => interactionListeners.forEach(listener => listener()));
 function nativeUpdatePrompt(name: string, version: string, requestId: string, hash: string) {
@@ -188,8 +189,8 @@ const launcherOptions = [
   { data: "heroic", label: "Heroic Games Launcher" },
   { data: "lutris", label: "Lutris" },
   { data: "legendary", label: "Legendary" },
-  { data: "steam-shortcuts", label: "Steam non-Steam shortcuts" },
-  { data: "all-launchers", label: "All supported launchers" },
+  { data: "steam-shortcuts", label: "Steam 비-Steam 바로가기" },
+  { data: "all-launchers", label: "지원되는 모든 런처" },
 ];
 let selectedLauncher = "heroic";
 let launcherImportMessage = "";
@@ -218,8 +219,8 @@ function watchJobs(next: Job[]) {
     if (j.state === "running" || notifiedJobs.has(j.id)) return;
     notifiedJobs.add(j.id);
     if (!watchedJobs.some(old => old.id === j.id && old.state === "running")) return;
-    toaster.toast({ title: j.state === "completed" ? j.kind === "install_latest" ? "HelixSR files installed" : "HelixSR preparation complete" : j.state === "cancelled" ? "HelixSR operation cancelled" : "HelixSR operation failed",
-      body: `${j.game}: ${j.message}${j.state === "completed" && j.kind === "install_latest" ? " Open the game's Next step to finish launch setup and check runtime status." : ""}`, duration: 8000 });
+    toaster.toast({ title: j.state === "completed" ? j.kind === "install_latest" ? "업스케일러 설치 완료" : "업스케일러 준비 완료" : j.state === "cancelled" ? "작업이 취소됨" : "작업 실패",
+      body: `${j.game}: ${j.message}${j.state === "completed" && j.kind === "install_latest" ? " 게임의 '다음 단계' 안내에 따라 시작 옵션 및 런타임 상태를 확인하세요." : ""}`, duration: 8000 });
   });
   watchedJobs = next;
   jobListeners.forEach(listener => listener(next, finished));
@@ -394,19 +395,19 @@ function Content() {
   async function importFromLauncher() {
     const source = selectedLauncher;
     const label = launcherOptions.find(option => option.data === source)!.label;
-    reportLauncherImport(`Detecting installed games from ${label}…`);
+    reportLauncherImport(`${label}에서 설치된 게임 검색 중…`);
     const result = await run(() => importLauncher(source));
     if (!result?.launcher_import) {
-      reportLauncherImport("Import failed. Review the error message and try again.");
+      reportLauncherImport("가져오기 실패. 오류 메시지를 확인하고 다시 시도해 주세요.");
       return;
     }
     setData(result); watchJobs(result.jobs);
     const report = result.launcher_import;
     const summary = report.found
-      ? `${report.found} game${report.found === 1 ? "" : "s"} found · ${report.added} new · ${report.candidates} installation candidate${report.candidates === 1 ? "" : "s"}${report.unavailable ? ` · ${report.unavailable} unavailable` : ""}`
-      : `No importable installed games found in ${label}. Check that the game is installed and its drive is mounted, or use Games Folders below for a custom location.`;
+      ? `${report.found}개 게임 발견 · 신규 추가 ${report.added}개 · 설치 가능 ${report.candidates}개${report.unavailable ? ` · 설치 불가 ${report.unavailable}개` : ""}`
+      : `${label}에서 가져올 수 있는 설치된 게임을 찾지 못했습니다. 게임이 설치되어 있고 드라이브가 마운트되어 있는지 확인하거나, 아래 '게임 폴더 관리'에서 경로를 직접 추가하세요.`;
     const message = report.warnings.length
-      ? `${summary} ${report.warnings.length} detection warning${report.warnings.length === 1 ? "" : "s"}; open Discovery notes below.`
+      ? `${summary} (${report.warnings.length}개의 검색 경고가 있습니다. 위의 '검색 참고사항'을 확인하세요.)`
       : summary;
     reportLauncherImport(message);
     // Keep the existing selection. Auto-select a candidate only when none exists.
@@ -416,18 +417,18 @@ function Content() {
       chooseGame(first?.id || "");
       setGame(undefined);
     }
-    toaster.toast({ title: report.warnings.length ? "Game import finished with warnings" : "Game import complete", body: `${label}: ${message}`, duration: 6000 });
+    toaster.toast({ title: report.warnings.length ? "경고와 함께 게임 가져오기 완료" : "게임 가져오기 완료", body: `${label}: ${message}`, duration: 6000 });
   }
 
   async function installOrUpdate() {
     if (!game) return;
     const isFsr4 = variant?.startsWith("fsr4-");
     const currentRelease = await run(() => isFsr4 ? checkUpdates(true, variant) : checkUpdates(true));
-    if (!currentRelease?.version || currentRelease.error) { setError(currentRelease?.error || "Could not check the latest release. Retry Check latest HelixSR version in Updates."); return; }
+    if (!currentRelease?.version || currentRelease.error) { setError(currentRelease?.error || "최신 릴리즈를 확인하지 못했습니다. 아래 '최신 버전 확인' 버튼을 다시 시도해 주세요."); return; }
     if (!isFsr4) setData(d => d ? { ...d, release: currentRelease } : d);
     if (game.route === "optiscaler" && optiChannel === "nightly") {
       const nightlyRelease = await run(() => checkOptiScalerNightlyUpdate(true));
-      if (!nightlyRelease?.version || nightlyRelease.error) { setError(nightlyRelease?.error || "Could not check the latest OptiScaler Nightly release."); return; }
+      if (!nightlyRelease?.version || nightlyRelease.error) { setError(nightlyRelease?.error || "최신 OptiScaler Nightly 릴리즈를 확인하지 못했습니다."); return; }
       setData(d => d ? { ...d, optiscaler_nightly_release: nightlyRelease } : d);
     }
     const executable = !game.managed && game.route === "optiscaler" ? game.selected_executable : undefined;
@@ -440,16 +441,17 @@ function Content() {
       ? previewLatest(game.id, dx12, variant, executable, requestedRoute)
       : previewLatest(game.id, dx12, variant, executable));
     if (!p) return;
-    openDialog(<ConfirmModal bDisableBackgroundDismiss strTitle={`${game.managed || game.legacy ? "Update" : "Install"} HelixSR ${currentRelease.version}`}
+    openDialog(<ConfirmModal bDisableBackgroundDismiss strTitle={`업스케일러 ${game.managed || game.legacy ? "업데이트" : "설치"} (${currentRelease.version})`}
       strDescription={<div style={{ overflowWrap: "anywhere" }}>
         <p>{p.name}: {p.warning}</p>
-        <p>Selected model: {p.model}. HelixSR release: {p.release_version}.</p>
-        {p.optiscaler_label && <p>OptiScaler build: {p.optiscaler_label} ({p.optiscaler_version}).</p>}
-        {p.selected_executable && <p>Game executable: {p.selected_executable}</p>}
-        <p>Required downloads and local preparation are automatic. Uses HelixSR freeware and NVIDIA DLSS under their linked licenses. Locally generated network files must stay on this device.</p>
-        <p>Files: {p.files.join(", ")}</p>
+        <p>선택한 모델: {p.model} · 릴리즈 버전: {p.release_version}</p>
+        {p.optiscaler_label && <p>OptiScaler 빌드: {p.optiscaler_label} ({p.optiscaler_version})</p>}
+        {p.selected_executable && <p>게임 실행 파일: {p.selected_executable}</p>}
+        <p>필요한 다운로드와 로컬 패키지 준비가 자동으로 진행됩니다. HelixSR 프리웨어, NVIDIA DLSS, FSR 4 셰이더 오버라이드 및 OptiScaler가 각 라이선스 조건에 따라 사용되며, 로컬에서 생성된 네트워크 파일은 이 기기 내부에만 보관됩니다.</p>
+        <p>변경 대상 파일: {p.files.join(", ")}</p>
       </div>}
-      strOKButtonText={data?.license_accepted ? "Install / update HelixSR" : "Accept terms and install"}
+      strOKButtonText={data?.license_accepted ? "업스케일러 설치 / 업데이트" : "약관 동의 및 설치"}
+      strCancelButtonText="취소"
       onOK={() => { if (!beginReview()) return; void run(async () => {
         await setLicense(true, p.token);
         const job = await installLatest(p.token);
@@ -464,14 +466,15 @@ function Content() {
     const requestedRoute = !game.managed ? routeRef.current : undefined;
     const p = await run(() => requestedRoute !== undefined ? previewAction(game.id, name, dx12, executable, requestedRoute) : previewAction(game.id, name, dx12, executable));
     if (!p) return;
-    openDialog(<ConfirmModal bDisableBackgroundDismiss strTitle={`${name.toUpperCase()}: ${p.name}`}
+    const actionLabel = name === "enable" ? "활성화" : name === "disable" ? "비활성화" : name === "remove" ? "제거 및 원본 복원" : name === "recover" ? "중단된 작업 복구" : name.toUpperCase();
+    openDialog(<ConfirmModal bDisableBackgroundDismiss strTitle={`${actionLabel}: ${p.name}`}
       strDescription={<div style={{ overflowWrap: "anywhere" }}>
-        <p>{p.warning}</p><p>Route: {p.route}. In game: select {p.select_upscaler}.</p>
-        {p.selected_executable && <p>Game executable: {p.selected_executable}</p>}
-        <p>Files: {p.files.join(", ")}</p>
-      </div>} strOKButtonText="Apply reviewed change" strCancelButtonText="Cancel"
+        <p>{p.warning}</p><p>적용 경로: {p.route === "direct" ? "Direct (네이티브 FSR 3.1 교체)" : p.route === "optiscaler" ? "OptiScaler 프록시" : p.route} · 게임 내 그래픽 설정: {p.select_upscaler} 선택</p>
+        {p.selected_executable && <p>게임 실행 파일: {p.selected_executable}</p>}
+        <p>대상 파일: {p.files.join(", ")}</p>
+      </div>} strOKButtonText="검토한 변경사항 적용" strCancelButtonText="취소"
       onOK={() => { if (!beginReview()) return; void run(() => applyAction(p.token)).then(async result => {
-        if (result) toaster.toast({ title: "HelixSR Decky", body: result.message });
+        if (result) toaster.toast({ title: "Upscaler Decky", body: result.message });
         await refresh();
       }).finally(() => { reviewApplying = false; finishInteraction(); }); }} />);
   }
@@ -485,33 +488,34 @@ function Content() {
     let after: string;
     try {
       if (receipt?.pending) {
-        if (receipt.pending.restore !== restore) throw new Error("Finish the pending launch-option change using the same action first.");
+        if (receipt.pending.restore !== restore) throw new Error("먼저 동일한 작업으로 대기 중인 시작 옵션 변경을 완료해 주세요.");
         after = receipt.pending.after;
       } else if (restore) {
-        if (!receipt || receipt.after !== before) throw new Error("Launch options changed outside the plugin. Review them in Steam.");
+        if (!receipt || receipt.after !== before) throw new Error("플러그인 외부에서 시작 옵션이 변경되었습니다. Steam 속성에서 직접 확인해 주세요.");
         after = receipt.before;
       } else {
         after = proxyOptions(before);
-        if (after === before) { toaster.toast({ title: "HelixSR Decky", body: "OptiScaler proxy launch option is already configured" }); return; }
+        if (after === before) { toaster.toast({ title: "Upscaler Decky", body: "OptiScaler 프록시 시작 옵션이 이미 설정되어 있습니다" }); return; }
       }
     } catch (e) { setError(String(e)); return; }
-    openDialog(<ConfirmModal bDisableBackgroundDismiss strTitle={restore ? "Restore previous launch options" : "Enable Proton OptiScaler proxy"}
-      strDescription={<div style={{ overflowWrap: "anywhere" }}><p>Before: {before || "empty"}</p><p>After: {after || "empty"}</p></div>}
+    openDialog(<ConfirmModal bDisableBackgroundDismiss strTitle={restore ? "이전 시작 옵션으로 복원" : "Proton OptiScaler 프록시 시작 옵션 활성화"}
+      strDescription={<div style={{ overflowWrap: "anywhere" }}><p>변경 전: {before || "비어 있음"}</p><p>변경 후: {after || "비어 있음"}</p></div>}
+      strOKButtonText="확인" strCancelButtonText="취소"
       onOK={() => { if (!beginReview()) return; void run(async () => {
         const current = await liveLaunchOptions(appid);
-        if (current !== before) throw new Error("Live launch options changed since preview");
+        if (current !== before) throw new Error("미리보기 이후 실시간 시작 옵션이 변경되었습니다");
         const intent = await prepareLaunch(game.id, before, after, restore);
         SteamClient.Apps.SetAppLaunchOptions(appid, after);
         const saved = await liveLaunchOptions(appid);
-        if (saved !== after) throw new Error("Steam did not confirm saved launch options");
+        if (saved !== after) throw new Error("Steam에서 저장된 시작 옵션이 확인되지 않았습니다");
         await finalizeLaunch(game.id, intent.nonce, saved);
-        toaster.toast({ title: "HelixSR Decky", body: "Steam launch options saved and verified" });
+        toaster.toast({ title: "Upscaler Decky", body: "Steam 시작 옵션이 저장 및 확인되었습니다" });
         await refresh();
       }).finally(() => { reviewApplying = false; finishInteraction(); }); }} />);
   }
   async function updatePlugin(resume = false) {
     if (typeof DeckyBackend === "undefined" || typeof DeckyBackend.callable !== "function" || !DeckyBackend.addEventListener || !DeckyBackend.removeEventListener) {
-      setError("This Decky version cannot open the plugin installer. Use Decky Settings → Developer → Install plugin from URL with the release ZIP.");
+      setError("현재 Decky 버전에서 플러그인 설치 창을 열 수 없습니다. Decky 설정 → 개발자 → URL에서 플러그인 설치 메뉴로 릴리즈 ZIP을 설치해 주세요.");
       return;
     }
     await run(async () => {
@@ -519,7 +523,7 @@ function Content() {
       // Informational status failures must never prevent the native handoff.
       pollPluginStatus();
       await pluginInstaller.open(prepared);
-      toaster.toast({ title: "Plugin downloaded, confirmation required", body: "Press Update in Decky's confirmation. Downloading alone does not install the plugin.", duration: 10000 });
+      toaster.toast({ title: "플러그인 다운로드 완료 (설치 확인 필요)", body: "Decky 확인 창에서 'Update(업데이트)'를 눌러야 실제 설치가 완료됩니다.", duration: 10000 });
     });
   }
   async function cancelDownloadedPlugin() {
@@ -532,10 +536,10 @@ function Content() {
   const libraryGames = (data?.games || []).map(g => game?.id === g.id ? game : g);
   const games = libraryGames.filter(librarySelectable);
   const unavailable = libraryGames.filter(g => !games.includes(g));
-  const libraryView = libraryStatus(data ? libraryGames : undefined, libraryLoading, !!libraryError);
+  const libraryView = koLibraryView(libraryStatus(data ? libraryGames : undefined, libraryLoading, !!libraryError));
   const selectedStatus = game ? gameStatus(game) : undefined;
   const installState = game ? installReadiness(game, dx12) : undefined;
-  const guidance = nextStep(game?.setup_guidance, jobs.find(job => job.state === "running"));
+  const guidance = koGuidance(nextStep(game?.setup_guidance, jobs.find(job => job.state === "running")));
   const infoStyle = { fontSize: "13px", lineHeight: "1.45", overflowWrap: "anywhere" as const, whiteSpace: "pre-wrap" as const };
 
   return <div className="helixsr-decky">
@@ -549,211 +553,211 @@ function Content() {
       .helixsr-decky .helix-card{width:100%;box-sizing:border-box;padding:12px;border-left:3px solid #53c5d0;border-radius:7px;background:rgba(34,83,104,.25)}
       .helixsr-decky .helix-muted{color:#c5d1df;font-size:12px}
       .helixsr-decky .helix-status{color:#8ee8bc}`}</style>
-    <PanelSection title="Games">
+    <PanelSection title="게임 목록">
       <PanelSectionRow><div className="helix-card helix-muted">{libraryView.summary}</div></PanelSectionRow>
       {libraryView.hint && <PanelSectionRow><div className="helix-muted">{libraryView.hint}</div></PanelSectionRow>}
       {!!libraryError && <PanelSectionRow><div style={infoStyle}>{libraryError}</div></PanelSectionRow>}
       {(data?.warnings || []).length > 0 && <PanelSectionRow><ButtonItem layout="below" onClick={() => setDiscoveryNotes(!discoveryNotes)}>
-        {discoveryNotes ? "Hide discovery notes" : `Show discovery notes (${data!.warnings.length})`}</ButtonItem></PanelSectionRow>}
+        {discoveryNotes ? "검색 참고사항 숨기기" : `검색 참고사항 보기 (${data!.warnings.length})`}</ButtonItem></PanelSectionRow>}
       {discoveryNotes && !!data?.warnings.length && <PanelSectionRow><div style={infoStyle}>{data.warnings.join("\n")}</div></PanelSectionRow>}
       <div className={`${selectedStatus?.installed ? "helix-installed" : ""} helix-selected`}><PanelSectionRow>
-        <DropdownItem layout="below" label="Game" menuLabel="Detected games" selectedOption={selected}
-          strDefaultLabel={games.length ? "Select a game" : libraryGames.length ? "See unavailable games below" : "No games available to select"} disabled={busy || modalOpen || !games.length}
-          rgOptions={games.map(g => ({ data: g.id, label: <span style={{ borderLeft: `3px solid ${gameStatus(g).color}`, paddingLeft: 8 }}>{g.name} · {gameStatus(g).label}</span> }))}
+        <DropdownItem layout="below" label="게임 선택" menuLabel="감지된 게임" selectedOption={selected}
+          strDefaultLabel={games.length ? "게임을 선택하세요" : libraryGames.length ? "아래 설치 불가 게임을 확인하세요" : "선택 가능한 게임이 없습니다"} disabled={busy || modalOpen || !games.length}
+          rgOptions={games.map(g => ({ data: g.id, label: <span style={{ borderLeft: `3px solid ${gameStatus(g).color}`, paddingLeft: 8 }}>{g.name} · {koStatusLabel(gameStatus(g).label)}</span> }))}
           onChange={option => chooseGame(String(option.data))} />
       </PanelSectionRow></div>
       {game && <>
-        <PanelSectionRow><div className="helix-muted" style={{ color: selectedStatus?.color }}>{selectedStatus?.summary}</div></PanelSectionRow>
+        <PanelSectionRow><div className="helix-muted" style={{ color: selectedStatus?.color }}>{koStatusSummary(selectedStatus?.summary || "")}</div></PanelSectionRow>
         {guidance && <PanelSectionRow><div className="helix-card" style={infoStyle}>
-          <strong>Next step: {guidance.headline}</strong>{"\n"}
+          <strong>다음 단계: {guidance.headline}</strong>{"\n"}
           {guidance.steps.join("\n\n")}
           {guidance.notes.map((note, index) => <p key={index}>{note}</p>)}
         </div></PanelSectionRow>}
         {guidance?.links.map(link => <PanelSectionRow key={link.url}><ButtonItem layout="below" disabled={modalOpen}
           onClick={() => SteamClient.System.OpenInSystemBrowser(link.url)}>{link.label}</ButtonItem></PanelSectionRow>)}
         {game.installation_status?.issues.map((issue, index) => <PanelSectionRow key={`${issue.code}-${index}`}><div className="helix-card" style={{ ...infoStyle, borderLeftColor: issue.blocking ? "#f1ca7e" : "#53c5d0" }}>
-          <strong>{issue.title}</strong>{"\n"}{issue.reason}{"\n"}Next: {issue.steps.join(" ")}
+          <strong>{issue.title}</strong>{"\n"}{issue.reason}{"\n"}조치 방법: {issue.steps.join(" ")}
         </div></PanelSectionRow>)}
         {!game.managed && (game.available_routes?.length || 0) > 1 && <>
-          <PanelSectionRow><DropdownItem layout="below" label="Installation route" menuLabel="Choose installation route"
-            selectedOption={game.route || "direct"} strDefaultLabel="Choose installation route" disabled={disabled}
+          <PanelSectionRow><DropdownItem layout="below" label="설치 방식 (경로)" menuLabel="설치 방식 선택"
+            selectedOption={game.route || "direct"} strDefaultLabel="설치 방식 선택" disabled={disabled}
             rgOptions={game.available_routes!.map(r => ({
               data: r,
-              label: r === "direct" ? "Native FSR 3.1 replacement (direct)" : "OptiScaler proxy (DLSS/XeSS/FSR2)"
+              label: r === "direct" ? "네이티브 FSR 3.1 DLL 직접 교체 (Direct)" : "OptiScaler 프록시 (DLSS/XeSS/FSR2 경유)"
             }))}
             onChange={option => void chooseRoute(String(option.data))} /></PanelSectionRow>
-          <PanelSectionRow><div className="helix-muted">Both native FSR 3.1 and OptiScaler input DLLs were detected. Choose whether to replace the native FSR 3.1 DLL directly or install via OptiScaler proxy.</div></PanelSectionRow>
+          <PanelSectionRow><div className="helix-muted">네이티브 FSR 3.1 DLL과 OptiScaler 입력 DLL이 모두 감지되었습니다. 네이티브 FSR 3.1 DLL을 직접 교체할지, OptiScaler 프록시(인게임 실시간 전환 지원)로 설치할지 선택하세요.</div></PanelSectionRow>
         </>}
         {!game.managed && game.route === "optiscaler" && !!game.executable_choices?.length && (game.executable_choices.length > 1 || !game.executable_choices.some(choice => choice.path === game.selected_executable)) && <>
-          <PanelSectionRow><DropdownItem layout="below" label="Game executable" menuLabel="Choose the executable you launch"
-            selectedOption={game.selected_executable} strDefaultLabel="Choose a game executable" disabled={disabled}
-            rgOptions={game.executable_choices!.map(choice => ({ data: choice.path, label: `${choice.path} · ${choice.dx12 ? "DX12 detected" : "Confirm DX12"}` }))}
+          <PanelSectionRow><DropdownItem layout="below" label="게임 실행 파일" menuLabel="실제 실행되는 실행 파일 선택"
+            selectedOption={game.selected_executable} strDefaultLabel="게임 실행 파일 선택" disabled={disabled}
+            rgOptions={game.executable_choices!.map(choice => ({ data: choice.path, label: `${choice.path} · ${choice.dx12 ? "DX12 감지됨" : "DX12 확인 필요"}` }))}
             onChange={option => void chooseExecutable(String(option.data))} /></PanelSectionRow>
-          <PanelSectionRow><div className="helix-muted">Choose the DX12 executable you actually launch. HelixSR will be installed beside it. Existing installs keep their recorded folder; remove them before choosing another executable.</div></PanelSectionRow>
+          <PanelSectionRow><div className="helix-muted">실제로 게임을 구동하는 DX12 실행 파일(.exe)을 선택하세요. 해당 실행 파일과 같은 폴더에 업스케일러가 설치됩니다.</div></PanelSectionRow>
         </>}
-        {game.dx12_confirmation_needed && <PanelSectionRow><ToggleField label="Game is set to DirectX 12"
-          description="Confirm the renderer selected in the game." checked={dx12} onChange={setDx12} disabled={disabled} /></PanelSectionRow>}
-        {installState?.reason && <PanelSectionRow><div role="status" style={infoStyle}>{installState.reason}</div></PanelSectionRow>}
-        {!!pluginUpdate?.pending && <PanelSectionRow><div style={infoStyle}>Finish or cancel the downloaded plugin update in Plugin updates before installing game files.</div></PanelSectionRow>}
+        {game.dx12_confirmation_needed && <PanelSectionRow><ToggleField label="게임이 DirectX 12로 설정됨"
+          description="게임 내 그래픽 설정에서 렌더러가 DirectX 12로 선택되어 있음을 확인합니다." checked={dx12} onChange={setDx12} disabled={disabled} /></PanelSectionRow>}
+        {installState?.reason && <PanelSectionRow><div role="status" style={infoStyle}>{koInstallReason(installState.reason)}</div></PanelSectionRow>}
+        {!!pluginUpdate?.pending && <PanelSectionRow><div style={infoStyle}>게임 파일을 설치하기 전에 아래 '플러그인 업데이트'에서 다운로드된 플러그인 업데이트를 완료하거나 취소해 주세요.</div></PanelSectionRow>}
         <div className="helix-primary"><PanelSectionRow><ButtonItem layout="below" disabled={disabled || !installState?.allowed}
-          onClick={() => void interact(installOrUpdate)}>{game.managed || game.legacy ? "Update this game's HelixSR" : "Install HelixSR for this game"}</ButtonItem></PanelSectionRow></div>
+          onClick={() => void interact(installOrUpdate)}>{game.managed || game.legacy ? "이 게임의 업스케일러 업데이트 / 모델 변경" : "이 게임에 업스케일러 설치"}</ButtonItem></PanelSectionRow></div>
         {game.managed && !game.enabled && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || game.compatibility !== "candidate" || game.installation_status?.can_modify === false}
-          onClick={() => void interact(() => action("enable"))}>Enable HelixSR</ButtonItem></PanelSectionRow>}
+          onClick={() => void interact(() => action("enable"))}>업스케일러 활성화</ButtonItem></PanelSectionRow>}
         {game.managed && game.enabled && game.route === "optiscaler" && game.appid && <PanelSectionRow><ButtonItem layout="below" disabled={disabled}
-          onClick={() => void interact(() => launchChange())}>Review Proton proxy launch option</ButtonItem></PanelSectionRow>}
+          onClick={() => void interact(() => launchChange())}>Proton 프록시 시작 옵션 설정</ButtonItem></PanelSectionRow>}
       </>}
       {jobs.slice().reverse().map(job => <PanelSectionRow key={job.id}><div className="helix-card" style={infoStyle} role="status">
-        <strong>{job.game}: {job.state === "running" ? "Installing / preparing HelixSR…" : job.state}</strong>{"\n"}{job.message}
-        {job.state === "running" && <ButtonItem layout="below" disabled={busy || modalOpen} onClick={() => void interact(async () => openDialog(<ConfirmModal bDisableBackgroundDismiss strTitle="Cancel preparation?"
-          strDescription="No game files are changed during preparation. Temporary build files will be removed."
-          onOK={() => void run(() => cancelJob(job.id))} />))}>Cancel preparation</ButtonItem>}
+        <strong>{job.game}: {job.state === "running" ? "업스케일러 준비 및 설치 중…" : job.state}</strong>{"\n"}{job.message}
+        {job.state === "running" && <ButtonItem layout="below" disabled={busy || modalOpen} onClick={() => void interact(async () => openDialog(<ConfirmModal bDisableBackgroundDismiss strTitle="준비 작업을 취소할까요?"
+          strDescription="준비 단계 중에는 게임 파일이 변경되지 않으며, 임시 빌드 파일만 정리됩니다."
+          strOKButtonText="작업 취소" strCancelButtonText="닫기"
+          onOK={() => void run(() => cancelJob(job.id))} />))}>준비 작업 취소</ButtonItem>}
         {diagnostics && <pre style={{ ...infoStyle, fontSize: "11px" }}>{job.log}</pre>}
       </div></PanelSectionRow>)}
-      <PanelSectionRow><ButtonItem layout="below" onClick={() => void refresh()} disabled={busy || modalOpen}>Refresh library and status</ButtonItem></PanelSectionRow>
-      {!!unavailable.length && <PanelSectionRow><ButtonItem layout="below" onClick={() => setUnavailableGames(!unavailableGames)}>{unavailableGames ? "Hide unavailable games" : `Unavailable games (${unavailable.length})`}</ButtonItem></PanelSectionRow>}
-      {unavailableGames && unavailable.map(g => <PanelSectionRow key={g.id}><div className="helix-card helix-muted">{g.name}{"\n"}{g.installation_status?.issues.map(i => `${i.title}: ${i.reason}\nNext: ${i.steps.join(" ")}`).join("\n\n") || g.reasons.join("\n") || "No supported upscaler detected"}</div></PanelSectionRow>)}
+      <PanelSectionRow><ButtonItem layout="below" onClick={() => void refresh()} disabled={busy || modalOpen}>라이브러리 및 상태 새로고침</ButtonItem></PanelSectionRow>
+      {!!unavailable.length && <PanelSectionRow><ButtonItem layout="below" onClick={() => setUnavailableGames(!unavailableGames)}>{unavailableGames ? "설치 불가 게임 숨기기" : `설치 불가 게임 (${unavailable.length})`}</ButtonItem></PanelSectionRow>}
+      {unavailableGames && unavailable.map(g => <PanelSectionRow key={g.id}><div className="helix-card helix-muted">{g.name}{"\n"}{g.installation_status?.issues.map(i => `${i.title}: ${i.reason}\n조치: ${i.steps.join(" ")}`).join("\n\n") || g.reasons.join("\n") || "지원되는 업스케일러가 감지되지 않았습니다"}</div></PanelSectionRow>)}
       {error && <PanelSectionRow><div role="alert" style={{ ...infoStyle, color: "#ffb4a7" }}>{error}</div></PanelSectionRow>}
     </PanelSection>
-    {game && <PanelSection title="Status overlay">
-      <PanelSectionRow><ToggleField label="Show HelixSR status overlay (experimental)"
-        description="Checks the HUD helper and monitors new session log events. Enable before launching the game."
+    {game && <PanelSection title="상태 오버레이">
+      <PanelSectionRow><ToggleField label="업스케일러 상태 오버레이 표시 (실험적)"
+        description="HUD 헬퍼 및 새 세션 로그 이벤트를 모니터링합니다. 게임을 실행하기 전에 켜세요."
         checked={!!overlay?.enabled && overlay.game_id === game.id} disabled={busy || modalOpen}
         onChange={enabled => void run(() => routeRef.current !== undefined ? setStatusOverlay(game.id, enabled, executableRef.current, routeRef.current) : setStatusOverlay(game.id, enabled, executableRef.current)).then(value => { if (value) publishOverlayStatus(value); })} /></PanelSectionRow>
       {!!overlay?.enabled && overlay.game_id === game.id && <PanelSectionRow><div className="helix-card" style={infoStyle}>
         {overlay.overlay.label}{"\n"}{overlay.overlay.detail}{"\n\n"}
         {overlay.runtime.label}{"\n"}{overlay.runtime.detail}
       </div></PanelSectionRow>}
-      <PanelSectionRow><div className="helix-muted">A mapped HUD confirms the helper responds; it does not prove the HUD is visible. New dispatch events report neural output, not image quality or active frame generation. Other overlays and game settings are left unchanged.</div></PanelSectionRow>
+      <PanelSectionRow><div className="helix-muted">HUD 연결은 헬퍼 응답과 신경망 디스패치 이벤트를 확인하며, 다른 오버레이나 게임 내 그래픽 설정은 변경하지 않습니다.</div></PanelSectionRow>
     </PanelSection>}
     {game && <PanelSection title={game.name}>
       <PanelSectionRow><div className="helix-card" style={infoStyle}>
-        {game.source} · {game.compatibility}{"\n"}
-        {game.managed ? "Recorded route" : "Detected route"}: {game.route === "direct" ? "Native FSR 3.1 replacement" : game.route === "optiscaler" ? "OptiScaler proxy" : "None detected"}{"\n"}
-        {selectedStatus?.summary}{"\n"}
-        Prepared: {game.package_version || "none on this drive"}{"\n"}
-        Installed model: {game.installed_model || "not installed"}{"\n"}
-        {game.route === "optiscaler" && game.installed_optiscaler ? `Installed OptiScaler: ${game.installed_optiscaler}\n` : ""}
+        출처: {game.source} · 호환성: {game.compatibility === "candidate" ? "설치 가능 (candidate)" : game.compatibility}{"\n"}
+        {game.managed ? "설치된 경로" : "감지된 경로"}: {game.route === "direct" ? "네이티브 FSR 3.1 직접 교체 (Direct)" : game.route === "optiscaler" ? "OptiScaler 프록시" : "감지되지 않음"}{"\n"}
+        {koStatusSummary(selectedStatus?.summary || "")}{"\n"}
+        드라이브 준비 버전: {game.package_version || "이 드라이브에 준비된 패키지 없음"}{"\n"}
+        설치된 모델: {game.installed_model || "미설치"}{"\n"}
+        {game.route === "optiscaler" && game.installed_optiscaler ? `설치된 OptiScaler: ${game.installed_optiscaler}\n` : ""}
         {game.reasons.join("\n")}
       </div></PanelSectionRow>
       {!!data?.model_catalog?.variants.length && <>
-        <PanelSectionRow><DropdownItem label="HelixSR model" rgOptions={data.model_catalog.variants.map(v => ({ label: `${v.label} · ${v.source}`, data: v.id }))}
+        <PanelSectionRow><DropdownItem label="업스케일러 모델" rgOptions={data.model_catalog.variants.map(v => ({ label: `${v.label} · ${v.source}`, data: v.id }))}
           selectedOption={variant || data.model_catalog.default} disabled={disabled}
           onChange={option => setVariant(String(option.data))} /></PanelSectionRow>
-        <PanelSectionRow><div className="helix-muted">{data.model_catalog.note}</div></PanelSectionRow>
+        <PanelSectionRow><div className="helix-muted">{koModelNote(data.model_catalog.note)}</div></PanelSectionRow>
       </>}
       {game.route === "optiscaler" && !!data?.optiscaler_catalog?.channels.length && <>
-        <PanelSectionRow><DropdownItem label="OptiScaler build" rgOptions={data.optiscaler_catalog.channels.map(c => ({ label: `${c.label} · ${c.source}`, data: c.id }))}
+        <PanelSectionRow><DropdownItem label="OptiScaler 빌드" rgOptions={data.optiscaler_catalog.channels.map(c => ({ label: `${c.label} · ${c.source}`, data: c.id }))}
           selectedOption={optiChannel || data.optiscaler_catalog.default} disabled={disabled}
           onChange={option => setOptiChannel(String(option.data))} /></PanelSectionRow>
-        <PanelSectionRow><div className="helix-muted">Choose between the bundled stable OptiScaler 0.9.4 and the official OptiScaler Nightly release (with automatic OptiScaler.ini migration).</div></PanelSectionRow>
+        <PanelSectionRow><div className="helix-muted">기본 번들된 안정 버전(OptiScaler 0.9.4)과 공식 OptiScaler Nightly 최신 빌드 중 선택할 수 있으며, 전환 시 OptiScaler.ini 설정이 자동으로 마이그레이션됩니다.</div></PanelSectionRow>
       </>}
-      <PanelSectionRow><div className="helix-muted">Downloads, required dependencies and the local network build are handled automatically. Administrator access is not needed for your own game folders.</div></PanelSectionRow>
+      <PanelSectionRow><div className="helix-muted">다운로드, 필수 의존성 준비 및 로컬 네트워크 빌드가 자동으로 처리됩니다. 본인 소유의 게임 폴더에는 관리자 권한이 필요하지 않습니다.</div></PanelSectionRow>
       {game.managed && <>
         {game.enabled && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || !canRestore(game)}
-          onClick={() => void interact(() => action("disable"))}>Disable HelixSR</ButtonItem></PanelSectionRow>}
-        <PanelSectionRow><ButtonItem layout="below" disabled={disabled || !canRestore(game)} onClick={() => void interact(() => action("remove"))}>Remove and restore originals</ButtonItem></PanelSectionRow>
+          onClick={() => void interact(() => action("disable"))}>업스케일러 비활성화</ButtonItem></PanelSectionRow>}
+        <PanelSectionRow><ButtonItem layout="below" disabled={disabled || !canRestore(game)} onClick={() => void interact(() => action("remove"))}>제거 및 원본 파일 복원</ButtonItem></PanelSectionRow>
       </>}
-      {game.recovery_available && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || !!game.installation_status?.running} onClick={() => void interact(() => action("recover"))}>Recover interrupted file transaction</ButtonItem></PanelSectionRow>}
+      {game.recovery_available && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || !!game.installation_status?.running} onClick={() => void interact(() => action("recover"))}>중단된 파일 작업 복구</ButtonItem></PanelSectionRow>}
       {game.source === "Imported" && <PanelSectionRow><ButtonItem layout="below" disabled={disabled || game.managed}
-        onClick={() => void run(() => forgetGame(game.id)).then(result => { if (result) { setData(result); chooseGame(""); } })}>Forget imported folder</ButtonItem></PanelSectionRow>}
+        onClick={() => void run(() => forgetGame(game.id)).then(result => { if (result) { setData(result); chooseGame(""); } })}>가져온 게임 폴더 목록에서 제외</ButtonItem></PanelSectionRow>}
     </PanelSection>}
-    {game && <PanelSection title="OptiScaler and frame generation">
+    {game && <PanelSection title="OptiScaler 및 프레임 생성">
       <PanelSectionRow><div style={infoStyle}>
-        OptiScaler installed: {game.optiscaler.present === null ? "not inspected" : game.optiscaler.present ? "yes" : "no detected files"}{"\n"}
-        OptiScaler HelixSR route configured: {game.optiscaler.helix_configured ? "yes" : "no"}{"\n"}
-        OptiScaler runtime: {game.optiscaler.runtime}{"\n"}
-        HelixSR runtime: {game.helix_runtime}{"\n"}
-        Frame generation: {game.framegen_summary}{"\n"}
+        OptiScaler 설치 여부: {game.optiscaler.present === null ? "미검사" : game.optiscaler.present ? "설치됨" : "감지된 파일 없음"}{"\n"}
+        OptiScaler 경로 설정 여부: {game.optiscaler.helix_configured ? "설정됨" : "미설정"}{"\n"}
+        OptiScaler 런타임: {game.optiscaler.runtime}{"\n"}
+        업스케일러 런타임: {game.helix_runtime}{"\n"}
+        프레임 생성(FG): {game.framegen_summary}{"\n"}
         {game.framegen.map(f => `${f.source} · ${f.key}: ${f.value} (${f.meaning})`).join("\n")}{"\n"}
-        HelixSR has no frame generation of its own. Settings and runtime evidence are separate.
+        HelixSR 자체에는 프레임 생성 기능이 없으며, 게임 및 OptiScaler의 프레임 생성 설정은 별도로 유지됩니다.
       </div></PanelSectionRow>
       {game.route === "optiscaler" && <PanelSectionRow><div style={infoStyle}>
-        Target: {game.main_exe || game.target || "unknown"}{"\n"}
-        {(game.optiscaler.setup?.checks || []).join("\n\n")}
+        대상 실행 파일: {game.main_exe || game.target || "미확인"}{"\n"}
+        {(game.optiscaler.setup?.checks || []).map(koCheckLine).join("\n\n")}
       </div></PanelSectionRow>}
       {game.route === "optiscaler" && game.appid && <>
-        {!(game.managed && game.enabled) && <PanelSectionRow><ButtonItem layout="below" disabled={disabled} onClick={() => void interact(() => launchChange())}>Review Proton proxy launch option</ButtonItem></PanelSectionRow>}
-        <PanelSectionRow><ButtonItem layout="below" disabled={disabled} onClick={() => void interact(() => launchChange(true))}>Restore plugin launch-option change</ButtonItem></PanelSectionRow>
+        {!(game.managed && game.enabled) && <PanelSectionRow><ButtonItem layout="below" disabled={disabled} onClick={() => void interact(() => launchChange())}>Proton 프록시 시작 옵션 설정</ButtonItem></PanelSectionRow>}
+        <PanelSectionRow><ButtonItem layout="below" disabled={disabled} onClick={() => void interact(() => launchChange(true))}>플러그인 시작 옵션 변경 복원</ButtonItem></PanelSectionRow>
       </>}
-      <PanelSectionRow><ButtonItem layout="below" onClick={() => setDiagnostics(!diagnostics)}>{diagnostics ? "Hide diagnostics" : "Show diagnostics and logs"}</ButtonItem></PanelSectionRow>
+      <PanelSectionRow><ButtonItem layout="below" onClick={() => setDiagnostics(!diagnostics)}>{diagnostics ? "진단 및 로그 숨기기" : "진단 및 로그 보기"}</ButtonItem></PanelSectionRow>
       {diagnostics && <PanelSectionRow><div style={infoStyle}>
-        Folder: {game.folder}{"\n"}Launch options: {game.launch_options || "none detected"}{"\n"}
+        폴더: {game.folder}{"\n"}시작 옵션: {game.launch_options || "감지되지 않음"}{"\n"}
         {(game.awareness_warnings || []).join("\n")}{"\n"}
         {Object.entries(game.optiscaler.setup?.settings || {}).map(([key, value]) => `${key}=${value}`).join("\n")}{"\n"}
-        {(game.logs || []).map(l => `${l.path}\n${new Date(l.modified * 1000).toLocaleString()}\n${l.excerpt}`).join("\n\n") || "No supported logs found"}
+        {(game.logs || []).map(l => `${l.path}\n${new Date(l.modified * 1000).toLocaleString()}\n${l.excerpt}`).join("\n\n") || "지원되는 로그 파일 없음"}
       </div></PanelSectionRow>}
     </PanelSection>}
-    <PanelSection title="Plugin updates">
+    <PanelSection title="플러그인 업데이트">
       <PanelSectionRow><div className="helix-card" style={{ ...infoStyle, borderLeftColor: pluginUpdate?.update_available ? "#ad8aff" : "#55cd92" }}>
-        Current plugin: {pluginUpdate?.current_version || "loading…"}{"\n"}
-        Latest plugin: {pluginUpdate?.latest_version || "checking required"}{"\n"}
-        {pluginUpdate?.error ? "Could not check for updates" : pluginUpdate?.pending ? "Downloaded. Confirm Update in Decky to install." : pluginUpdate?.update_available ? "Plugin update available" : pluginUpdate?.checked_at ? "Plugin is up to date" : pluginUpdate?.auto_check === false ? "Automatic checks are off" : "Automatic check will run shortly"}
+        현재 플러그인 버전: {pluginUpdate?.current_version || "불러오는 중…"}{"\n"}
+        최신 플러그인 버전: {pluginUpdate?.latest_version || "확인 필요"}{"\n"}
+        {pluginUpdate?.error ? "업데이트를 확인하지 못했습니다" : pluginUpdate?.pending ? "다운로드 완료. Decky 확인 창에서 Update를 눌러 설치하세요." : pluginUpdate?.update_available ? "새 플러그인 업데이트가 있습니다" : pluginUpdate?.checked_at ? "최신 버전입니다" : pluginUpdate?.auto_check === false ? "자동 업데이트 확인 꺼짐" : "잠시 후 자동 확인이 실행됩니다"}
       </div></PanelSectionRow>
       <PanelSectionRow><ButtonItem layout="below" disabled={busy || modalOpen || !!pluginUpdate?.pending}
-        onClick={() => void run(() => checkPluginUpdates(true)).then(r => { if (r) publishPluginStatus(r); })}>Check plugin updates</ButtonItem></PanelSectionRow>
-      <PanelSectionRow><ToggleField label="Check plugin updates automatically" description="Checks on startup and once a day. Updates are installed only after you confirm."
+        onClick={() => void run(() => checkPluginUpdates(true)).then(r => { if (r) publishPluginStatus(r); })}>플러그인 업데이트 확인</ButtonItem></PanelSectionRow>
+      <PanelSectionRow><ToggleField label="플러그인 업데이트 자동 확인" description="시작 시 및 하루 1회 업데이트를 확인합니다. 실제 설치는 직접 승인할 때만 진행됩니다."
         checked={pluginUpdate?.auto_check ?? true} disabled={busy || modalOpen || !!pluginUpdate?.pending}
         onChange={enabled => void run(() => setPluginAutoCheck(enabled)).then(r => { if (r) publishPluginStatus(r); })} /></PanelSectionRow>
       {pluginUpdate?.update_available && !pluginUpdate.pending && <div className="helix-primary"><PanelSectionRow><ButtonItem layout="below"
-        disabled={disabled} onClick={() => void interact(() => updatePlugin())}>Download plugin update</ButtonItem></PanelSectionRow></div>}
+        disabled={disabled} onClick={() => void interact(() => updatePlugin())}>플러그인 업데이트 다운로드</ButtonItem></PanelSectionRow></div>}
       {pluginUpdate?.pending && <div className="helix-primary"><PanelSectionRow><ButtonItem layout="below" disabled={busy || modalOpen}
-        onClick={() => void interact(() => updatePlugin(true))}>Open update confirmation</ButtonItem></PanelSectionRow></div>}
+        onClick={() => void interact(() => updatePlugin(true))}>업데이트 확인 창 열기</ButtonItem></PanelSectionRow></div>}
       {pluginUpdate?.pending && <PanelSectionRow><ButtonItem layout="below" disabled={busy || modalOpen}
-        onClick={() => void interact(cancelDownloadedPlugin)}>Cancel downloaded update</ButtonItem></PanelSectionRow>}
-      {pluginUpdate?.pending && <PanelSectionRow><div className="helix-muted">{pluginInstallMessage || "Press Update in Decky's confirmation to finish. Close that screen before reopening it here. Restart Decky if installation status is unresolved."}</div></PanelSectionRow>}
+        onClick={() => void interact(cancelDownloadedPlugin)}>다운로드한 업데이트 취소</ButtonItem></PanelSectionRow>}
+      {pluginUpdate?.pending && <PanelSectionRow><div className="helix-muted">{pluginInstallMessage || "Decky 확인 창에서 Update를 눌러 설치를 완료하세요. 다시 열기 전에 기존 창을 닫아주시고, 상태가 갱신되지 않으면 Decky를 재시작하세요."}</div></PanelSectionRow>}
       {pluginUpdate?.error && <PanelSectionRow><div className="helix-muted">{pluginUpdate.error}</div></PanelSectionRow>}
     </PanelSection>
-    <PanelSection title="HelixSR updates">
-      <PanelSectionRow><div className="helix-card" style={infoStyle}>Current HelixSR: {game?.installed_version || "not installed"}{"\n"}
-        Latest HelixSR: {data?.release?.version || "checking required"}</div></PanelSectionRow>
-      <PanelSectionRow><ButtonItem layout="below" disabled={busy || modalOpen} onClick={() => void run(() => checkUpdates(true)).then(r => { if (r) setData(d => d ? { ...d, release: r } : d); })}>Check latest HelixSR version</ButtonItem></PanelSectionRow>
-      <PanelSectionRow><div className="helix-muted">Checks the release version. Use the selected game's Install or Update button to apply it.</div></PanelSectionRow>
+    <PanelSection title="업스케일러 버전 및 가이드">
+      <PanelSectionRow><div className="helix-card" style={infoStyle}>현재 설치된 버전: {game?.installed_version || "미설치"}{"\n"}
+        최신 HelixSR 버전: {data?.release?.version || "확인 필요"}</div></PanelSectionRow>
+      <PanelSectionRow><ButtonItem layout="below" disabled={busy || modalOpen} onClick={() => void run(() => checkUpdates(true)).then(r => { if (r) setData(d => d ? { ...d, release: r } : d); })}>최신 HelixSR 버전 확인</ButtonItem></PanelSectionRow>
+      <PanelSectionRow><div className="helix-muted">릴리즈 버전을 확인합니다. 실제 게임 적용은 위 게임 섹션의 '설치 / 업데이트' 버튼을 사용하세요.</div></PanelSectionRow>
       {data?.release?.error && <PanelSectionRow><div className="helix-muted">{data.release.error}</div></PanelSectionRow>}
-      <PanelSectionRow><ButtonItem layout="below" onClick={() => setSetupOptions(!setupOptions)}>{setupOptions ? "Hide preparation settings" : "Preparation settings"}</ButtonItem></PanelSectionRow>
-      <PanelSectionRow><ButtonItem layout="below" disabled={modalOpen} onClick={() => void interact(async () => openDialog(<ConfirmModal bDisableBackgroundDismiss strTitle="Installation guide" strOKButtonText="Done"
-        strDescription={<div><p>1. Choose a detected game from the Game dropdown. Green means HelixSR is present; purple highlights the install/update action.</p>
-          <p>2. Choose Install HelixSR or Update HelixSR and review the change. Required downloads and the local network build happen automatically.</p>
-          <p>3. Wait for completion, then launch the game with DirectX 12. Choose AMD FSR for a native replacement, or the appropriate DLSS/XeSS/FSR input for OptiScaler.</p>
-          <p>For an OptiScaler Steam game, use Review Proton proxy launch option to save its required override while preserving your other options.</p>
-          <p>For launcher games, scroll to Import games, choose Import Games From, select Heroic or Lutris, then Import Now. Supported installed games appear in the Game dropdown. For other locations, open Manage Games Folders, add each game folder, then Import selected folders.</p>
-          <p>Administrator access is unnecessary for writable folders owned by you.</p>
-          <p>Disable and Remove restore the original game files. Unsupported renderers and protected games cannot be made compatible by administrator access.</p></div>} />))}>
-        Installation guide</ButtonItem></PanelSectionRow>
-      <PanelSectionRow><ButtonItem layout="below" disabled={modalOpen} onClick={() => SteamClient.System.OpenInSystemBrowser("https://github.com/dawoodtogoo2020-code/HelixSR-Decky/blob/main/INSTALL_GUIDE.md")}>Open full guide</ButtonItem></PanelSectionRow>
-      <PanelSectionRow><ButtonItem layout="below" disabled={modalOpen} onClick={() => SteamClient.System.OpenInSystemBrowser("https://github.com/dawoodtogoo2020-code/HelixSR-Decky/issues/new?template=bug_report.yml")}>Report a problem</ButtonItem></PanelSectionRow>
+      <PanelSectionRow><ButtonItem layout="below" onClick={() => setSetupOptions(!setupOptions)}>{setupOptions ? "로컬 준비 설정 숨기기" : "로컬 준비 및 라이선스 설정"}</ButtonItem></PanelSectionRow>
+      <PanelSectionRow><ButtonItem layout="below" disabled={modalOpen} onClick={() => void interact(async () => openDialog(<ConfirmModal bDisableBackgroundDismiss strTitle="설치 및 사용 가이드" strOKButtonText="확인"
+        strDescription={<div><p>1. '게임 선택' 드롭다운에서 게임을 선택하세요. 초록색 테두리는 업스케일러가 설치된 게임이며, 보라색 버튼으로 설치/업데이트를 진행합니다.</p>
+          <p>2. 원하는 설치 방식(Direct 또는 OptiScaler), 업스케일러 모델(HelixSR Model E, FSR 4.1.1 iGPU Exact / Lossy), OptiScaler 빌드(0.9.4 / Nightly)를 선택한 뒤 '설치 / 업데이트'를 누르세요.</p>
+          <p>3. 작업이 완료되면 게임을 DirectX 12 모드로 실행하세요. Direct 경로는 게임 설정에서 AMD FSR을, OptiScaler 경로는 DLSS(또는 XeSS/FSR 입력)를 선택합니다.</p>
+          <p>4. OptiScaler 경로로 FSR 4를 설치한 경우, 게임 중 Insert 키를 눌러 Upscaling → Upscalers → FFX Upscaler에서 HelixSR과 FSR 4를 실시간으로 전환하며 비교할 수 있습니다.</p>
+          <p>5. Steam의 OptiScaler 게임은 'Proton 프록시 시작 옵션 설정' 버튼을 눌러 기존 옵션을 유지하면서 WINEDLLOVERRIDES를 자동으로 추가하세요.</p>
+          <p>6. 비활성화 및 제거 버튼을 누르면 언제든 백업된 원본 게임 파일로 안전하게 복원됩니다.</p></div>} />))}>
+        설치 및 사용 가이드</ButtonItem></PanelSectionRow>
+      <PanelSectionRow><ButtonItem layout="below" disabled={modalOpen} onClick={() => SteamClient.System.OpenInSystemBrowser("https://github.com/supercleans/Upscaler-Decky/blob/main/INSTALL_GUIDE.md")}>전체 가이드 열기</ButtonItem></PanelSectionRow>
+      <PanelSectionRow><ButtonItem layout="below" disabled={modalOpen} onClick={() => SteamClient.System.OpenInSystemBrowser("https://github.com/supercleans/Upscaler-Decky/issues")}>문제 신고하기</ButtonItem></PanelSectionRow>
       {setupOptions && <>
-      <PanelSectionRow><ToggleField label="Accept local preparation terms" checked={!!data?.license_accepted}
-        description="Uses the official HelixSR freeware release, NVIDIA DLSS under NVIDIA's license, portable Python, numpy and DXC. Network stays on this device. Review upstream licenses before accepting."
+      <PanelSectionRow><ToggleField label="로컬 패키지 준비 약관 동의" checked={!!data?.license_accepted}
+        description="공식 HelixSR 프리웨어 릴리즈, NVIDIA DLSS(NVIDIA 라이선스), FSR 4 셰이더 오버라이드, 포터블 Python, numpy 및 DXC를 사용합니다. 생성된 네트워크 파일은 이 기기 내부에만 유지됩니다."
         onChange={accepted => void run(() => setLicense(accepted)).then(ok => setData(d => d ? { ...d, license_accepted: !!ok } : d))} /></PanelSectionRow>
-      <PanelSectionRow><ButtonItem layout="below" onClick={() => SteamClient.System.OpenInSystemBrowser("https://github.com/lonewolf0622/HelixSR/blob/main/LICENSE")}>Read HelixSR license</ButtonItem></PanelSectionRow>
-      <PanelSectionRow><ButtonItem layout="below" onClick={() => SteamClient.System.OpenInSystemBrowser("https://github.com/NVIDIA/DLSS/blob/v310.7.0/LICENSE.txt")}>Read NVIDIA DLSS license</ButtonItem></PanelSectionRow>
+      <PanelSectionRow><ButtonItem layout="below" onClick={() => SteamClient.System.OpenInSystemBrowser("https://github.com/lonewolf0622/HelixSR/blob/main/LICENSE")}>HelixSR 라이선스 보기</ButtonItem></PanelSectionRow>
+      <PanelSectionRow><ButtonItem layout="below" onClick={() => SteamClient.System.OpenInSystemBrowser("https://github.com/NVIDIA/DLSS/blob/v310.7.0/LICENSE.txt")}>NVIDIA DLSS 라이선스 보기</ButtonItem></PanelSectionRow>
       </>}
     </PanelSection>
-    <PanelSection title="Import games">
-      <PanelSectionRow><DropdownItem layout="below" label="Import Games From" menuLabel="Import Games From"
+    <PanelSection title="게임 가져오기">
+      <PanelSectionRow><DropdownItem layout="below" label="가져올 런처 선택" menuLabel="가져올 런처 선택"
         selectedOption={launcher} disabled={disabled} rgOptions={launcherOptions}
         onChange={option => chooseLauncher(String(option.data))} /></PanelSectionRow>
       <div className="helix-primary"><PanelSectionRow><ButtonItem layout="below" disabled={disabled}
-        onClick={() => void interact(importFromLauncher)}>Import Now</ButtonItem></PanelSectionRow></div>
-      <PanelSectionRow><div className="helix-muted">Detects installed games from the selected launcher. Compatibility is checked before HelixSR installation.</div></PanelSectionRow>
+        onClick={() => void interact(importFromLauncher)}>지금 가져오기</ButtonItem></PanelSectionRow></div>
+      <PanelSectionRow><div className="helix-muted">선택한 런처에 설치된 게임을 검색하고 업스케일러 호환성을 진단합니다.</div></PanelSectionRow>
       {!!importMessage && <PanelSectionRow><div className="helix-card helix-muted" style={infoStyle}>{importMessage}</div></PanelSectionRow>}
-      <PanelSectionRow><ButtonItem layout="below" disabled={disabled} onClick={() => { if (!interactionBusy && Date.now() >= interactionAfter) setImportOpen(!importOpen); }}>{importOpen ? "Hide Games Folders" : "Manage Games Folders"}</ButtonItem></PanelSectionRow>
+      <PanelSectionRow><ButtonItem layout="below" disabled={disabled} onClick={() => { if (!interactionBusy && Date.now() >= interactionAfter) setImportOpen(!importOpen); }}>{importOpen ? "게임 폴더 관리 숨기기" : "게임 폴더 직접 관리"}</ButtonItem></PanelSectionRow>
       {importOpen && <>
-      <PanelSectionRow><div className="helix-muted">Steam, Heroic, Legendary and Lutris are detected automatically. Add other game folders below.</div></PanelSectionRow>
-      <PanelSectionRow><TextField label="Games Folder" value={folder} disabled={disabled} onChange={e => setFolder(e.target.value)} /></PanelSectionRow>
+      <PanelSectionRow><div className="helix-muted">Steam, Heroic, Legendary, Lutris 외의 사용자 지정 게임 폴더를 아래에서 직접 추가할 수 있습니다.</div></PanelSectionRow>
+      <PanelSectionRow><TextField label="게임 폴더 경로" value={folder} disabled={disabled} onChange={e => setFolder(e.target.value)} /></PanelSectionRow>
       <PanelSectionRow><ButtonItem layout="below" disabled={disabled} onClick={() => void interact(async () => { await run(async () => {
         const pick = await openFilePicker(1, folder || "/home/deck", false, true);
         queueFolders([...new Set([...pendingFolders, pick.realpath])]);
-      }); })}>Add Games Folder</ButtonItem></PanelSectionRow>
-      {!!folder && <PanelSectionRow><ButtonItem layout="below" disabled={disabled} onClick={() => { if (interactionBusy || Date.now() < interactionAfter) return; queueFolders([...new Set([...pendingFolders, folder])]); setFolder(""); }}>Add typed folder</ButtonItem></PanelSectionRow>}
+      }); })}>파일 탐색기로 폴더 추가</ButtonItem></PanelSectionRow>
+      {!!folder && <PanelSectionRow><ButtonItem layout="below" disabled={disabled} onClick={() => { if (interactionBusy || Date.now() < interactionAfter) return; queueFolders([...new Set([...pendingFolders, folder])]); setFolder(""); }}>입력한 경로 추가</ButtonItem></PanelSectionRow>}
       {!!folders.length && <PanelSectionRow><div className="helix-card helix-muted">{folders.join("\n")}</div></PanelSectionRow>}
       {folders.map(path => <PanelSectionRow key={path}><ButtonItem layout="below" disabled={disabled}
-        onClick={() => queueFolders(pendingFolders.filter(p => p !== path))}>Remove folder: {path.split("/").filter(Boolean).pop()}</ButtonItem></PanelSectionRow>)}
+        onClick={() => queueFolders(pendingFolders.filter(p => p !== path))}>폴더 제외: {path.split("/").filter(Boolean).pop()}</ButtonItem></PanelSectionRow>)}
       {!!folders.length && <PanelSectionRow><ButtonItem layout="below" disabled={disabled}
-        onClick={() => queueFolders([])}>Clear selected folders</ButtonItem></PanelSectionRow>}
+        onClick={() => queueFolders([])}>선택한 폴더 모두 비우기</ButtonItem></PanelSectionRow>}
       <PanelSectionRow><ButtonItem layout="below" disabled={disabled || !folders.length} onClick={() => void run(() => importFolders(folders)).then(result => {
         if (result) { setData(result); queueFolders([]); }
-      })}>Import selected folders ({folders.length})</ButtonItem></PanelSectionRow>
+      })}>선택한 폴더 가져오기 ({folders.length})</ButtonItem></PanelSectionRow>
       </>}
     </PanelSection>
   </div>;
