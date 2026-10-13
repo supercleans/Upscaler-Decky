@@ -298,8 +298,18 @@ def setup_report(target, route, options, proxy_files=()):
         if values.get('NvapiPath', 'auto').lower() != 'auto':
             checks.append('Custom NvapiPath is configured. Verify it points to your intended per-game NVAPI provider.')
         checks.append('Run the game in DX12. Open OptiScaler using ' + shortcut + '. Select Upscaling → Upscalers → FFX: FSR HelixSR (3.1.5).')
-        if directory and (directory / 'HelixSR/my-fsr/amd_fidelityfx_upscaler_dx12.dll').is_file():
-            checks.append('FSR 4 is installed in HelixSR/my-fsr. In OptiScaler (' + shortcut + '), open Upscaling → Upscalers → FFX Upscaler to switch between FSR HelixSR (3.1.5) and FSR 4.1.1.')
+        my_fsr_dll = directory / 'HelixSR/my-fsr/amd_fidelityfx_upscaler_dx12.dll' if directory else None
+        if my_fsr_dll and my_fsr_dll.is_file():
+            flavor = ''
+            try:
+                head = my_fsr_dll.read_bytes()[:4 << 20]
+                if b'4.1.1-igpu-lossy-cyboman\x00' in head:
+                    flavor = ' (iGPU Lossy)'
+                elif b'4.1.1-igpu-cyboman\x00' in head:
+                    flavor = ' (iGPU Exact)'
+            except OSError:
+                pass
+            checks.append('FSR 4 is installed in HelixSR/my-fsr' + flavor + '. In OptiScaler (' + shortcut + '), open Upscaling → Upscalers → FFX Upscaler to switch between FSR HelixSR (3.1.5) and FSR 4.1.1.')
         checks.append('If DLSS is unavailable, use a supported FSR or XeSS input if the game offers one. Input name alone does not identify the output backend. Otherwise collect a fresh OptiScaler.log.')
         checks.append('Check a fresh helixsr.log for neural output, then check gameplay for artifacts or crashes. Installed files and a mapped proxy alone do not prove rendering.')
     elif route == 'direct':

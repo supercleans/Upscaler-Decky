@@ -468,8 +468,12 @@ class FSR4VariantTests(Fixtures):
         self.native.unlink()
         write(self.root / 'nvngx_dlss.dll', pe())
         self.package()
-        prepared_lossy, _meta, _exact_bytes, lossy_bytes = self.prepare_fsr4(
+        prepared_lossy, _meta, exact_bytes, lossy_bytes = self.prepare_fsr4(
             model_variants.FSR4_IGPU_LOSSY, route='optiscaler')
+        # Preparing Lossy from fsr4.1.1-igpu-cyboman.zip also caches Exact simultaneously
+        cached_exact = self.m.package(self.game, 'optiscaler', variant_id=model_variants.FSR4_IGPU_EXACT)
+        self.assertIsNotNone(cached_exact)
+        self.assertEqual((cached_exact[1] / model_variants.MY_FSR_DLL).read_bytes(), exact_bytes)
         data = self.m.assess(self.game)
         self.assertEqual(data['route'], 'optiscaler')
         self.m.mutate(self.game, data, 'install', prepared_lossy)
@@ -479,12 +483,23 @@ class FSR4VariantTests(Fixtures):
         assessed = self.m.assess(self.game)
         self.assertEqual(assessed['installed_variant'], model_variants.FSR4_IGPU_LOSSY)
         checks = '\n'.join(assessed['optiscaler']['setup']['checks'])
-        self.assertIn('FSR 4 is installed in HelixSR/my-fsr', checks)
+        self.assertIn('FSR 4 is installed in HelixSR/my-fsr (iGPU Lossy)', checks)
+        # Switch instantly to FSR 4 Exact via preview/execute without any network call
+        token_exact = self.m.preview(
+            self.game['id'], 'update', variant_id=model_variants.FSR4_IGPU_EXACT
+        )['token']
+        self.m.execute(token_exact)
+        self.assertEqual(my_fsr.read_bytes(), exact_bytes)
+        assessed_exact = self.m.assess(self.game)
+        self.assertEqual(assessed_exact['installed_variant'], model_variants.FSR4_IGPU_EXACT)
+        checks_exact = '\n'.join(assessed_exact['optiscaler']['setup']['checks'])
+        self.assertIn('FSR 4 is installed in HelixSR/my-fsr (iGPU Exact)', checks_exact)
         self.action('disable')
         self.assertFalse(my_fsr.exists())
         self.assertFalse(my_fsr.parent.exists())
         self.action('enable')
         self.assertTrue(my_fsr.is_file())
+        self.assertEqual(my_fsr.read_bytes(), exact_bytes)
         self.action('remove')
         self.assertFalse(my_fsr.exists())
         self.assertEqual(self.m.assess(self.game)['compatibility'], 'candidate')

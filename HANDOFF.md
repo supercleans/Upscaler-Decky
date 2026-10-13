@@ -6,16 +6,17 @@
 
 ## 1. 프로젝트 개요 및 베이스라인
 
-- **플러그인 명칭**: `Upscaler-Decky` (`package.json`: `upscaler-decky`, 버전 `0.1.20`)
+- **플러그인 명칭**: `Upscaler-Decky` (`package.json`: `upscaler-decky`, 버전 `0.1.21`)
 - **업스트림 베이스**: `dawoodtogoo2020-code/HelixSR-Decky` `v0.1.20` (`c2e750c`) 병합 완료
 - **핵심 확장 목표**:
-  1. **HelixSR + FSR 4 모델 선택 지원**:
+  1. **HelixSR + FSR 4 모델 선택 및 동시 준비 지원**:
      - 기존 HelixSR 모델 4종(`default`, `quality-6b`, `balanced-2b`, `speed-2b`) 외에
      - `zgauthier2000/fsr4-shader-performance-overrides` 저장소의 공식 릴리즈(`fsr4.1.1-igpu-cyboman.zip`)에서 제공하는 **FSR 4.1.1 iGPU 셰이더 오버라이드 2종**(`fsr4-igpu-exact`, `fsr4-igpu-lossy`)을 선택하여 다운로드 및 적용 가능
+     - `fsr4.1.1-igpu-cyboman.zip` 준비 시 **`Exact`와 `Lossy` 두 가지 패키지를 동시에 빌드·캐싱**하여 재다운로드 없이 즉시 교체 가능
   2. **적용 방식(Integration Route) 사용자 선택 지원**:
      - 네이티브 FidelityFX DX12 업스케일러 DLL을 보유한 게임에서도 사용자가 **`direct`(직접 DLL 교체)** 또는 **`optiscaler`(OptiScaler 프록시 경유)** 방식을 직접 선택 가능
      - `direct` 경로 + FSR 4 선택 시: 게임의 `amd_fidelityfx_upscaler_dx12.dll`을 선택한 FSR 4 DLL로 백업 후 직접 교체
-     - `optiscaler` 경로 + FSR 4 선택 시: `HelixSR/my-fsr/amd_fidelityfx_upscaler_dx12.dll`에 선택한 FSR 4 DLL을 배치하고 `OptiScaler.ini`의 `FfxDx12Path` / `FfxDx12SRPath`를 `HelixSR/my-fsr`로 핀닝
+     - `optiscaler` 경로 + FSR 4 선택 시: HelixSR과 함께 `HelixSR/my-fsr/amd_fidelityfx_upscaler_dx12.dll`에 선택한 FSR 4 DLL(`Exact` 또는 `Lossy`)을 배치하고 인게임 `Insert` 메뉴(`Upscaling → Upscalers → FFX Upscaler`)에서 HelixSR과 FSR 4를 실시간으로 전환 가능
   3. **OptiScaler 빌드 채널 선택 지원 (`0.9.4 Bundled` vs `Nightly Official`)**:
      - `optiscaler` 경로 사용 시, HelixSR 패키지에 번들된 **OptiScaler 0.9.4 (`bundled`)**와 공식 나이틀리 저장소(`optiscaler/OptiScaler-nightly`)에서 최신 `.7z` 릴리즈를 받아오는 **OptiScaler Nightly (`nightly`, v10.0.0-pre1+)** 중 선택 가능
      - **OptiScaler.ini 양방향 자동 마이그레이션**: `0.9.4`와 `Nightly (v10+)` 간 전환/업데이트 시 사용자의 기존 커스텀 설정을 보존하면서 바뀐 섹션·키·값을 자동 변환
@@ -56,7 +57,7 @@
     - `[FSR] Fsr4ForceEnableInt8=true` ↔ `[FSR] Fsr4ForceModel=2`
     - `[CAS] UseDepthAwareSharpen` / `UseDASDepthAwareSharpen` ↔ `[Sharpness] Shader` (`da`/`dascas`, `lcda`)
 - `setup_report`:
-  - `Dx12Upscaler`가 `fsr31` 또는 `ffx`일 때 모두 정상 설정으로 인정하며 `optiscaler_schema` 필드를 반환
+  - `Dx12Upscaler`가 `fsr31` 또는 `ffx`일 때 모두 정상 설정으로 인정하며 `optiscaler_schema` 필드를 반환하고, `HelixSR/my-fsr` 내 FSR 4가 `iGPU Exact`인지 `iGPU Lossy`인지 구분하여 표시
 
 ### D. 패키지 준비 및 설치 매니저 (`py_modules/manager.py`)
 - **릴리즈 확인 메서드**:
@@ -66,8 +67,8 @@
   - `check_variant_update(variant_id=None, force=False)`
 - **패키지 준비 흐름 (`start_job` / `prepare`)**:
   - `route` (`direct` | `optiscaler`), `variant_id`, `optiscaler_channel` (`bundled` | `nightly`) 조합을 지원
-  - `_prepare_fsr4`: FSR 4 `.zip` 다운로드 및 검증 (필요 시 `optiscaler` 베이스 패키지 준비 포함)
-  - `_prepare_optiscaler_nightly`: `safe_extract_7z` (`7z` / `7zz` / `7za` / `bsdtar` 지원)로 Nightly `.7z` 압축 해제 및 검증 후 베이스 패키지의 `optiscaler/OptiScaler.dll`, `optiscaler/OptiScaler.ini`를 교체한 파생 패키지 생성
+  - `_prepare_fsr4`: FSR 4 `.zip` 1회 다운로드·검증 시 `fsr4-igpu-exact`와 `fsr4-igpu-lossy` 두 패키지를 동시에 생성 및 캐싱 (필요 시 `optiscaler` 베이스 패키지 준비 포함)
+  - `_prepare_optiscaler_nightly`: `safe_extract_7z` (`7z` / `7zz` / `7za` / `bsdtar` 지원)로 Nightly `.7z` 압축 해제 및 검증 후 베이스 패키지의 `optiscaler/OptiScaler.dll`, `optiscaler/OptiScaler.ini`를 교체한 파생 패키지 생성 (FSR 4 형제 패키지도 함께 Nightly 파생 패키지 생성)
 - **게임 상태 진단 및 적용 (`assess`, `preview_latest`, `preview`, `mutate`, `install_payload`)**:
   - 게임별로 `available_routes`, `route`, `installed_variant`, `installed_optiscaler`, `installed_optiscaler_channel` 반환
   - `install_payload`에서 `OptiScaler.ini` 핀닝 시 템플릿 세대에 맞춰 `default_dx12_upscaler(template)` 적용
@@ -83,7 +84,7 @@
   - 게임 상세 정보에 `Installed model`, `Installed OptiScaler` 표시
 
 ### F. 브랜딩 및 패키징 (`package.json`, `plugin.json`, `py_modules/plugin_updates.py`, `scripts/package.py`)
-- 플러그인 폴더명 및 릴리즈 아티팩트 명칭: `Upscaler-Decky` (`Upscaler-Decky-0.1.20.zip`)
+- 플러그인 폴더명 및 릴리즈 아티팩트 명칭: `Upscaler-Decky` (`Upscaler-Decky-0.1.21.zip`)
 
 ---
 

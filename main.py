@@ -172,14 +172,18 @@ class Plugin:
     async def cancel_job(self, jid):
         return self.manager.cancel_job(jid)
 
-    async def preview_action(self, gid, action, dx12_confirmed=False, executable=None, route=None, optiscaler_channel=None):
+    async def preview_action(self, gid, action, dx12_confirmed=False, executable=None, route=None, optiscaler_channel=None, variant_id=None):
         async with self.api_lock:
-            if route is None and optiscaler_channel is None:
+            if route is None and optiscaler_channel is None and variant_id is None:
                 return await asyncio.to_thread(self.manager.preview, gid, action, dx12_confirmed, executable)
-            if optiscaler_channel is None:
+            if optiscaler_channel is None and variant_id is None:
                 return await asyncio.to_thread(self.manager.preview, gid, action, dx12_confirmed, executable, route)
+            if variant_id is None:
+                return await asyncio.to_thread(
+                    self.manager.preview, gid, action, dx12_confirmed, executable, route, optiscaler_channel
+                )
             return await asyncio.to_thread(
-                self.manager.preview, gid, action, dx12_confirmed, executable, route, optiscaler_channel
+                self.manager.preview, gid, action, dx12_confirmed, executable, route, optiscaler_channel, variant_id
             )
 
     async def preview_latest(self, gid, dx12_confirmed=False, variant_id=None, executable=None, route=None, optiscaler_channel=None):

@@ -74,15 +74,17 @@ VARIANTS = {
                           source='NVIDIA DLSS 310.7.0', adapter=ADAPTER,
                           routes=['direct', 'optiscaler']),
     FSR4_IGPU_EXACT: dict(id=FSR4_IGPU_EXACT, label='FSR 4.1.1 (iGPU Exact)',
-                          source='fsr4-shader-performance-overrides (exact)', adapter=FSR4_ADAPTER,
+                          source='fsr4-shader-performance-overrides (OptiScaler: HelixSR + FSR 4 Exact)', adapter=FSR4_ADAPTER,
                           routes=['direct', 'optiscaler']),
     FSR4_IGPU_LOSSY: dict(id=FSR4_IGPU_LOSSY, label='FSR 4.1.1 (iGPU Lossy)',
-                          source='fsr4-shader-performance-overrides (lossy)', adapter=FSR4_ADAPTER,
+                          source='fsr4-shader-performance-overrides (OptiScaler: HelixSR + FSR 4 Lossy)', adapter=FSR4_ADAPTER,
                           routes=['direct', 'optiscaler']),
 }
 FUTURE_NOTE = ('Choose HelixSR Model E (NVIDIA DLSS 310.7.0) or FSR 4.1.1 iGPU (Exact/Lossy). '
                'Direct route installs the selected upscaler DLL directly; OptiScaler route '
-               'integrates FSR 4 into HelixSR/my-fsr so you can switch in-game.')
+               'installs HelixSR alongside the selected FSR 4 variant in HelixSR/my-fsr so you can '
+               'switch between HelixSR and FSR 4 in real time in-game (both Exact and Lossy are '
+               'prepared together for instant switching).')
 
 
 def is_fsr4_variant(value):

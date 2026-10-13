@@ -155,14 +155,16 @@ class DesktopBackend:
             self._write()
             return self.manager.execute_latest(token)
 
-    def preview_action(self, gid, action, dx12_confirmed=False, executable=None, route=None, optiscaler_channel=None):
+    def preview_action(self, gid, action, dx12_confirmed=False, executable=None, route=None, optiscaler_channel=None, variant_id=None):
         with self.lock:
             self._open()
-            if route is None and optiscaler_channel is None:
+            if route is None and optiscaler_channel is None and variant_id is None:
                 return self.manager.preview(gid, action, dx12_confirmed, executable)
-            if optiscaler_channel is None:
+            if optiscaler_channel is None and variant_id is None:
                 return self.manager.preview(gid, action, dx12_confirmed, executable, route)
-            return self.manager.preview(gid, action, dx12_confirmed, executable, route, optiscaler_channel)
+            if variant_id is None:
+                return self.manager.preview(gid, action, dx12_confirmed, executable, route, optiscaler_channel)
+            return self.manager.preview(gid, action, dx12_confirmed, executable, route, optiscaler_channel, variant_id)
 
     def apply_action(self, token):
         with self.lock:

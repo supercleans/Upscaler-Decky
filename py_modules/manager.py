@@ -33,8 +33,8 @@ from github_release import (FSR4_ASSET_NAME, FSR4_REPO, FSR4_TAG, FSR4_VERSION,
                             OPTISCALER_NIGHTLY_ASSET, OPTISCALER_NIGHTLY_REPO,
                             OPTISCALER_NIGHTLY_TAG, web_latest_fsr4_release,
                             web_latest_optiscaler_nightly_release, web_latest_release)
-from model_variants import (DEFAULT_OPTISCALER_CHANNEL, DEFAULT_VARIANT, FSR4_ADAPTER, MY_FSR_DLL,
-                            OPTISCALER_NIGHTLY_CHANNEL, catalog, is_fsr4_variant,
+from model_variants import (DEFAULT_OPTISCALER_CHANNEL, DEFAULT_VARIANT, FSR4_ADAPTER, FSR4_VARIANTS,
+                            MY_FSR_DLL, OPTISCALER_NIGHTLY_CHANNEL, catalog, is_fsr4_variant,
                             optiscaler_catalog, optiscaler_channel_of, optiscaler_label,
                             package_selection, same_release, select_optiscaler_channel,
                             select_variant, valid_optiscaler_build, valid_variant,
@@ -1740,7 +1740,15 @@ class Manager:
         release = self.check_variant_update(selected['id'], True)
         if release.get('error') or not release.get('version'):
             raise ValueError(release.get('error', 'Check upstream updates first'))
-        if self.cfg.get('license') != license_key(release, selected['id']):
+        accepted_lic = self.cfg.get('license')
+        expected_lic = license_key(release, selected['id'])
+        if accepted_lic != expected_lic and not (
+            isinstance(accepted_lic, dict) and isinstance(expected_lic, dict)
+            and is_fsr4_variant(selected['id'])
+            and accepted_lic.get('terms') == expected_lic.get('terms')
+            and accepted_lic.get('release_sha256') == expected_lic.get('release_sha256')
+            and accepted_lic.get('adapter') == expected_lic.get('adapter')
+        ):
             raise ValueError('Upstream release changed; review and accept its terms before preparation')
         if job.get('reviewed_release') and not same_release(release, job['reviewed_release']):
             raise ValueError('Upstream release changed since review; review Install or Update again')
@@ -1807,46 +1815,64 @@ class Manager:
             api = pe_info(nightly_files['optiscaler/OptiScaler.dll'])
             if api['arch'] != 'x64':
                 raise ValueError('Prepared OptiScaler Nightly DLL is not x64 Windows PE')
-            package = work / 'package'
-            package.mkdir(parents=True, exist_ok=True)
-            for rel, expected in base_package[2]['files'].items():
-                durable_copy(base_package[1] / rel, package / rel, expected)
-            for rel, src_path in nightly_files.items():
-                durable_copy(src_path, package / rel)
-            variant_meta = base_package[2].get('variant')
-            if valid_variant(variant_meta) and is_fsr4_variant(variant_meta['id']):
-                verify_fsr4_outputs(package)
-            else:
-                verify_outputs(package)
-            base_dir_name = base_package[1].name
-            final = companion / 'packages' / f"{base_dir_name}-opti-nightly-{opti_release['sha256'][:12]}"
-            final.parent.mkdir(parents=True, exist_ok=True)
-            if final.exists():
-                final = final.with_name(final.name + '-' + job['id'][:8])
-            os.replace(package, final)
-            payloads = tuple(dict.fromkeys(tuple(base_package[2]['files']) + tuple(nightly_files)))
-            for n in NETWORK:
-                if (final / n).is_file():
-                    (final / n).chmod(0o600)
-            record = dict(
-                version=base_package[2]['version'],
-                path=str(final),
-                release_sha256=base_package[2]['release_sha256'],
-                files={n: sha(final / n) for n in payloads},
-                prepared_at=time.time(),
-                variant=base_package[2]['variant'],
-                optiscaler_build=build_meta,
-            )
-            self.cfg.setdefault('variant_packages_v1', {})[str(final)] = record
+
+            def _build_nightly_pkg(target_base, suffix=''):
+                pkg_dir = work / ('package' + suffix)
+                pkg_dir.mkdir(parents=True, exist_ok=True)
+                for rel, expected in target_base[2]['files'].items():
+                    durable_copy(target_base[1] / rel, pkg_dir / rel, expected)
+                for rel, src_path in nightly_files.items():
+                    durable_copy(src_path, pkg_dir / rel)
+                var_meta = target_base[2].get('variant')
+                if valid_variant(var_meta) and is_fsr4_variant(var_meta['id']):
+                    verify_fsr4_outputs(pkg_dir)
+                else:
+                    verify_outputs(pkg_dir)
+                base_dir_name = target_base[1].name
+                final_dir = companion / 'packages' / f"{base_dir_name}-opti-nightly-{opti_release['sha256'][:12]}"
+                final_dir.parent.mkdir(parents=True, exist_ok=True)
+                if final_dir.exists():
+                    final_dir = final_dir.with_name(final_dir.name + '-' + job['id'][:8])
+                os.replace(pkg_dir, final_dir)
+                payloads = tuple(dict.fromkeys(tuple(target_base[2]['files']) + tuple(nightly_files)))
+                for n in NETWORK:
+                    if (final_dir / n).is_file():
+                        (final_dir / n).chmod(0o600)
+                rec = dict(
+                    version=target_base[2]['version'],
+                    path=str(final_dir),
+                    release_sha256=target_base[2]['release_sha256'],
+                    files={n: sha(final_dir / n) for n in payloads},
+                    prepared_at=time.time(),
+                    variant=target_base[2]['variant'],
+                    optiscaler_build=build_meta,
+                )
+                self.cfg.setdefault('variant_packages_v1', {})[str(final_dir)] = rec
+                return version(rec['version']), final_dir, rec
+
+            primary = _build_nightly_pkg(base_package)
+            new_records = [primary[2]]
+            var_meta = base_package[2].get('variant')
+            if valid_variant(var_meta) and is_fsr4_variant(var_meta['id']):
+                for other_id in FSR4_VARIANTS:
+                    if other_id == var_meta['id']:
+                        continue
+                    other_base = self.package(game, route='optiscaler', variant_id=other_id, optiscaler_channel=DEFAULT_OPTISCALER_CHANNEL)
+                    existing_nightly = self.package(game, route='optiscaler', variant_id=other_id, optiscaler_channel=OPTISCALER_NIGHTLY_CHANNEL)
+                    if other_base and not (existing_nightly and existing_nightly[2].get('optiscaler_build', {}).get('release_sha256') == opti_release['sha256']):
+                        with contextlib.suppress(ValueError, OSError):
+                            sibling = _build_nightly_pkg(other_base, suffix='-' + other_id)
+                            new_records.append(sibling[2])
             self.save()
             records = self.package_index(index_path)
             if records is None and index_path.is_file():
                 durable_copy(index_path, index_path.with_name('packages-v1-corrupt-' + job['id'] + '.json'))
             records = records or []
+            new_paths = {r['path'] for r in new_records}
             records = [r for r in records if self._package_record(r, game, companion)
-                       and r.get('path') != record['path']]
-            atomic_json(index_path, dict(schema=1, packages=(records + [record])[-256:]))
-            return version(record['version']), final, record
+                       and r.get('path') not in new_paths]
+            atomic_json(index_path, dict(schema=1, packages=(records + new_records)[-256:]))
+            return primary
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
@@ -2026,46 +2052,59 @@ class Manager:
             unpacked = work / 'unpacked'
             safe_extract(archive, unpacked)
             archive.unlink()
-            model, dll_path = verify_fsr4_archive(unpacked, selected['id'])
-            api = pe_info(dll_path)
-            if api['arch'] != 'x64' or not api['ffx']:
-                raise ValueError('Prepared FSR 4 DLL has an unsupported installation interface')
-            package = work / 'package'
-            package.mkdir(parents=True, exist_ok=True)
-            if base_package:
-                for rel in PACKAGE_FILES:
-                    durable_copy(base_package[1] / rel, package / rel, base_package[2]['files'][rel])
-                fg_rel = 'amd-fsr/' + AMD_FG
-                if (base_package[1] / fg_rel).is_file() and fg_rel in base_package[2]['files']:
-                    durable_copy(base_package[1] / fg_rel, package / fg_rel, base_package[2]['files'][fg_rel])
-            durable_copy(dll_path, package / MY_FSR_DLL, model['recipe_sha256'])
-            atomic_json(package / 'helixsr_setup.json', dict(schema=1, model=model))
-            verify_fsr4_outputs(package)
-            final = companion / 'packages' / (selected['id'] + '-v' + release['version']
-                                              + '-' + release['sha256'][:12] + '-' + model['recipe_sha256'][:12])
-            final.parent.mkdir(parents=True, exist_ok=True)
-            if final.exists():
-                final = final.with_name(final.name + '-' + job['id'][:8])
-            os.replace(package, final)
-            payloads = (MY_FSR_DLL, 'helixsr_setup.json')
-            if all((final / n).is_file() for n in PACKAGE_FILES):
-                payloads = PACKAGE_FILES + payloads
-                if (final / 'amd-fsr' / AMD_FG).is_file():
-                    payloads += ('amd-fsr/' + AMD_FG,)
-                for n in NETWORK:
-                    (final / n).chmod(0o600)
-            record = dict(version=release['version'], path=str(final), release_sha256=release['sha256'],
-                          files={n: sha(final / n) for n in payloads}, prepared_at=time.time(), variant=model)
-            self.cfg.setdefault('variant_packages_v1', {})[str(final)] = record
+            def _build_fsr4_pkg(var_id, suffix=''):
+                var_model, var_dll = verify_fsr4_archive(unpacked, var_id)
+                var_api = pe_info(var_dll)
+                if var_api['arch'] != 'x64' or not var_api['ffx']:
+                    raise ValueError('Prepared FSR 4 DLL has an unsupported installation interface')
+                pkg_dir = work / ('package' + suffix)
+                pkg_dir.mkdir(parents=True, exist_ok=True)
+                if base_package:
+                    for rel in PACKAGE_FILES:
+                        durable_copy(base_package[1] / rel, pkg_dir / rel, base_package[2]['files'][rel])
+                    fg_rel = 'amd-fsr/' + AMD_FG
+                    if (base_package[1] / fg_rel).is_file() and fg_rel in base_package[2]['files']:
+                        durable_copy(base_package[1] / fg_rel, pkg_dir / fg_rel, base_package[2]['files'][fg_rel])
+                durable_copy(var_dll, pkg_dir / MY_FSR_DLL, var_model['recipe_sha256'])
+                atomic_json(pkg_dir / 'helixsr_setup.json', dict(schema=1, model=var_model))
+                verify_fsr4_outputs(pkg_dir)
+                final_dir = companion / 'packages' / (var_id + '-v' + release['version']
+                                                      + '-' + release['sha256'][:12] + '-' + var_model['recipe_sha256'][:12])
+                final_dir.parent.mkdir(parents=True, exist_ok=True)
+                if final_dir.exists():
+                    final_dir = final_dir.with_name(final_dir.name + '-' + job['id'][:8])
+                os.replace(pkg_dir, final_dir)
+                payloads = (MY_FSR_DLL, 'helixsr_setup.json')
+                if all((final_dir / n).is_file() for n in PACKAGE_FILES):
+                    payloads = PACKAGE_FILES + payloads
+                    if (final_dir / 'amd-fsr' / AMD_FG).is_file():
+                        payloads += ('amd-fsr/' + AMD_FG,)
+                    for n in NETWORK:
+                        (final_dir / n).chmod(0o600)
+                rec = dict(version=release['version'], path=str(final_dir), release_sha256=release['sha256'],
+                           files={n: sha(final_dir / n) for n in payloads}, prepared_at=time.time(), variant=var_model)
+                self.cfg.setdefault('variant_packages_v1', {})[str(final_dir)] = rec
+                return version(rec['version']), final_dir, rec
+
+            primary = _build_fsr4_pkg(selected['id'])
+            new_records = [primary[2]]
+            for other_id in FSR4_VARIANTS:
+                if other_id == selected['id']:
+                    continue
+                if not self.package(game, route=target_route, release=release, variant_id=other_id, optiscaler_channel=DEFAULT_OPTISCALER_CHANNEL):
+                    with contextlib.suppress(ValueError, OSError):
+                        sibling = _build_fsr4_pkg(other_id, suffix='-' + other_id)
+                        new_records.append(sibling[2])
             self.save()
             records = self.package_index(index_path)
             if records is None and index_path.is_file():
                 durable_copy(index_path, index_path.with_name('packages-v1-corrupt-' + job['id'] + '.json'))
             records = records or []
+            new_paths = {r['path'] for r in new_records}
             records = [r for r in records if self._package_record(r, game, companion)
-                       and r.get('path') != record['path']]
-            atomic_json(index_path, dict(schema=1, packages=(records + [record])[-256:]))
-            return version(record['version']), final, record
+                       and r.get('path') not in new_paths]
+            atomic_json(index_path, dict(schema=1, packages=(records + new_records)[-256:]))
+            return primary
         finally:
             shutil.rmtree(work, ignore_errors=True)
 
@@ -2077,7 +2116,7 @@ class Manager:
                 action in ('disable', 'remove') and data['compatibility'] == 'unsupported'
                 and data.get('renderer_unsupported') and data.get('managed'))
 
-    def preview(self, gid, action, dx12_confirmed=False, executable=None, route=None, optiscaler_channel=None):
+    def preview(self, gid, action, dx12_confirmed=False, executable=None, route=None, optiscaler_channel=None, variant_id=None):
         with self.lock:
             game = self.get_game(gid)
             if action not in ('install', 'update', 'enable', 'disable', 'remove', 'adopt', 'recover'):
@@ -2118,8 +2157,15 @@ class Manager:
                     wanted_opti_channel = select_optiscaler_channel(
                         optiscaler_channel_of(rec) if optiscaler_channel is None and rec else optiscaler_channel
                     )['id']
+                wanted_variant = None
+                if action == 'enable':
+                    wanted_variant = rec['variant']['id'] if valid_variant(rec.get('variant')) else None
+                elif variant_id is not None:
+                    wanted_variant = select_variant(variant_id)['id']
+                elif valid_variant(rec.get('variant')):
+                    wanted_variant = rec['variant']['id']
                 package = self.package(game, data['route'],
-                                       variant_id=rec['variant']['id'] if valid_variant(rec.get('variant')) else None,
+                                       variant_id=wanted_variant,
                                        optiscaler_channel=wanted_opti_channel,
                                        selection=rec.get('package_selection') if action == 'enable' else None,
                                        installed=rec if action == 'enable' else None)
@@ -2145,6 +2191,7 @@ class Manager:
             fingerprint = self.fingerprint(game, data, package=package)
             self.previews[token] = dict(game=gid, action=action, fingerprint=fingerprint,
                                        package_selection=package_selection(package[2]) if action in ('install', 'update', 'enable') else None,
+                                       variant_id=wanted_variant if action in ('install', 'update', 'enable') else None,
                                        route=route if not data['managed'] else None,
                                        executable=data['selected_executable'] if not data['managed'] and data['route'] == 'optiscaler' else None,
                                        selected_executable=data['selected_executable'],
@@ -2264,8 +2311,9 @@ class Manager:
         rec = self.record(game)
         package = None
         if preview['action'] in ('install', 'update', 'enable'):
+            selected_var = preview.get('variant_id') or (rec['variant']['id'] if valid_variant(rec.get('variant')) else None)
             package = self.package(game, data['route'],
-                                   variant_id=rec['variant']['id'] if valid_variant(rec.get('variant')) else None,
+                                   variant_id=selected_var,
                                    selection=preview.get('package_selection'))
         if (not self.action_compatible(data, preview['action'])
                 or self.fingerprint(game, data, package=package) != preview['fingerprint']):
