@@ -143,3 +143,120 @@ export function koCheckLine(line: string): string {
       "HelixSR/my-fsr에 FSR 4가 함께 설치되어 있습니다. 게임 중 Insert 키를 눌러 Upscaling -> Upscalers -> FFX Upscaler 메뉴에서 HelixSR과 FSR 4를 실시간으로 전환할 수 있습니다."
     );
 }
+
+export function koIssueTitle(title: string): string {
+  const map: Record<string, string> = {
+    "DirectX 11 is unsupported": "DirectX 11 미지원",
+    "Game running": "게임 실행 중",
+    "Anti-cheat restriction": "안티치트 보안 차단",
+    "Steam update in progress": "Steam 업데이트/다운로드 진행 중",
+    "Managed files changed": "설치된 파일 외부 변경됨",
+    "Original file restored": "원본 파일 복원됨",
+    "Installed file missing": "설치된 파일 누락됨",
+    "Steam build changed": "Steam 게임 빌드 변경됨",
+    "Existing injector or configuration": "기존 외부 모드/인젝터 파일 충돌",
+    "Unmanaged original DLL backup": "기존 원본 백업 파일 충돌",
+    "Existing HelixSR installation": "기존 HelixSR 설치 감지됨",
+    "Executable needs review": "실행 파일 선택 필요",
+    "DX12 needs confirmation": "DirectX 12 확인 필요",
+    "Supported route unavailable": "지원되는 업스케일러 경로 없음",
+    "Recovery needed": "복구 작업 필요",
+  };
+  return map[title] || title;
+}
+
+export function koReason(reason: string): string {
+  if (!reason) return "";
+  if (reason.includes("uses DirectX 11 only")) {
+    return "이 게임은 DirectX 11 전용으로 구동됩니다. HelixSR 및 FSR 4는 DirectX 12(DX12)가 필수이며, 플러그인이 게임 자체의 렌더러를 변경할 수는 없습니다.";
+  }
+  if (reason.includes("No supported DLSS, XeSS, FSR 2 or native FSR 3.1")) {
+    return "게임 폴더 내에 교체 가능한 DLSS, XeSS, FSR 2/3 또는 네이티브 FSR 3.1 DLL 파일이 감지되지 않았습니다. 자체 그래픽 엔진을 사용하거나 업스케일러가 탑재되지 않은 게임입니다.";
+  }
+  if (reason.includes("Anti-cheat files detected")) {
+    return "안티치트(EasyAntiCheat, BattlEye 등) 보안 프로그램이 감지되었습니다. 게임 계정 제재(밴)를 방지하기 위해 파일 주입이 차단되었습니다.";
+  }
+  if (reason === "Game is running; close it before any file changes") {
+    return "게임이 현재 실행 중입니다. 파일 손상을 방지하기 위해 게임을 완전히 종료한 후 다시 시도해 주세요.";
+  }
+  if (reason.includes("StateFlags must be 4") || reason.includes("Steam download staging exists")) {
+    return "Steam에서 게임 다운로드 또는 업데이트가 아직 완료되지 않았습니다. 다운로드가 끝난 후 새로고침해 주세요.";
+  }
+  if (reason.includes("Main executable is not x64")) {
+    return "64비트(x64) Windows 실행 파일이 아닙니다. (32비트 구형 게임 또는 네이티브 리눅스 게임)";
+  }
+  if (reason.includes("Existing unmanaged injector/configuration")) {
+    return "외부에서 이미 수동으로 복사해 둔 인젝터 파일(dxgi.dll, OptiScaler.ini 등)이 존재합니다. 충돌을 방지하려면 기존 모드 파일을 먼저 삭제해 주세요.";
+  }
+  if (reason.includes("Unmanaged original DLL backup exists")) {
+    return "관리되지 않은 원본 백업 파일(*.original.dll)이 이미 존재합니다.";
+  }
+  if (reason.includes("Managed files changed")) {
+    return "설치된 업스케일러 파일이 게임 무결성 검사 또는 외부 패치로 인해 변경되었습니다. 원본 복원 후 재설치를 권장합니다.";
+  }
+  if (reason.includes("Steam build changed")) {
+    return "Steam 게임 빌드가 업데이트되어 파일 점검이 필요합니다.";
+  }
+  if (reason.includes("HelixSR requires an x86_64 host")) {
+    return "x86_64 시스템 환경이 필요합니다.";
+  }
+  if (reason.includes("DX12 is not confirmed by executable imports")) {
+    return "실행 파일에서 DX12가 즉시 확인되지 않았습니다. 인게임 그래픽 설정에서 렌더러가 DirectX 12로 설정되어 있는지 확인해 주세요.";
+  }
+  return reason;
+}
+
+export function koIssueStep(step: string): string {
+  if (!step) return "";
+  if (step.includes("Close the game normally")) {
+    return "게임을 완전히 종료한 후 상태를 새로고침하세요.";
+  }
+  if (step.includes("Keep HelixSR installation blocked")) {
+    return "계정 보호를 위해 이 게임에는 업스케일러 설치가 제한됩니다.";
+  }
+  if (step.includes("Let Steam finish the installation or update")) {
+    return "Steam 업데이트가 완료될 때까지 기다린 후 새로고침하세요.";
+  }
+  if (step.includes("Use the game's built-in upscaling instead")) {
+    return "게임 내 자체 업스케일러(FSR 1 등) 또는 해상도 스케일을 사용하세요.";
+  }
+  if (step.includes("Review the named files with the tool that installed them")) {
+    return "기존 모드 파일을 게임 폴더에서 수동으로 제거해 주세요.";
+  }
+  if (step.includes("Choose the x64 Windows game executable")) {
+    return "게임이 실제로 실행하는 64비트 메인 exe 파일을 선택하세요.";
+  }
+  return step;
+}
+
+export function koGameUnavailableExplanation(game: any): string {
+  if (!game) return "";
+  const reasons: string[] = game.installation_status?.issues?.map((i: any) => i.reason) || game.reasons || [];
+  for (const r of reasons) {
+    if (r.includes("uses DirectX 11 only") || game.renderer_unsupported) {
+      return "이 게임은 DirectX 11 전용으로 구동됩니다. HelixSR 및 FSR 4는 DirectX 12(DX12)가 필수이며, 플러그인이 게임 자체의 렌더러를 DirectX 12로 바꿀 수는 없습니다. 게임 내 자체 그래픽 설정을 사용해 주세요.";
+    }
+    if (r.includes("No supported DLSS, XeSS, FSR 2 or native FSR 3.1")) {
+      return "게임 폴더 내에 교체 가능한 DLSS, XeSS, FSR 2/3 또는 네이티브 FSR 3.1 DLL 파일이 감지되지 않았습니다. 자체 그래픽 엔진을 사용하거나 지원되는 업스케일러 기술이 탑재되지 않은 게임입니다.";
+    }
+    if (r.includes("Anti-cheat files detected")) {
+      return "안티치트(EasyAntiCheat, BattlEye 등) 보안 프로그램이 감지되었습니다. 게임 계정 제재(밴)를 방지하기 위해 파일 주입이 자동으로 차단되었습니다.";
+    }
+    if (r.includes("Game is running")) {
+      return "게임이 현재 실행 중입니다. 파일 손상을 방지하기 위해 게임을 완전히 종료한 후 다시 확인해 주세요.";
+    }
+    if (r.includes("Main executable is not x64")) {
+      return "64비트(x64) Windows 실행 파일이 아닙니다. 32비트 구형 게임이거나 네이티브 리눅스 바이너리 게임입니다.";
+    }
+    if (r.includes("StateFlags must be 4") || r.includes("Steam download staging exists")) {
+      return "Steam에서 게임 다운로드 또는 업데이트가 아직 완료되지 않았습니다. 다운로드가 완료된 후 다시 확인해 주세요.";
+    }
+    if (r.includes("Existing unmanaged injector/configuration")) {
+      return "외부에서 수동으로 복사해 둔 인젝터 파일(dxgi.dll, OptiScaler.ini 등)이 이미 존재합니다. 충돌을 방지하려면 기존 모드 파일을 먼저 삭제해 주세요.";
+    }
+  }
+  if (reasons.length) {
+    return reasons.map(koReason).join("\n");
+  }
+  return "이 게임은 현재 환경에서 지원되는 업스케일러 구성이 감지되지 않았습니다.";
+}
