@@ -6,17 +6,22 @@
 
 ## 1. 프로젝트 개요 및 베이스라인
 
-- **플러그인 명칭**: `Upscaler-Decky` (`package.json`: `upscaler-decky`, 버전 `0.1.24`)
+- **플러그인 명칭**: `Upscaler-Decky` (`package.json`: `upscaler-decky`, 버전 `0.1.25`)
 - **업스트림 베이스**: `dawoodtogoo2020-code/HelixSR-Decky` `v0.1.21` (`a3c0d21`) 병합 완료 (패널 재마운트 시 설치 확인 및 진행 상태 보존)
 - **핵심 확장 목표**:
-  1. **통합 UI 배치 (게임 설정 및 설치 섹션 상단화)**:
-     - 게임 선택 직후 `설치 방식 (경로)`, `업스케일러 모델`, `OptiScaler 빌드`를 한눈에 볼 수 있도록 설치 버튼 바로 위로 재배치
-     - 단일 경로만 지원되는 게임의 경우에도 현재 지정된 경로 및 사유를 안내 카드로 명확히 표시
-     - 설치 전/후 어떤 방식과 모델이 적용되는지 직관적으로 확인 가능
-  2. **OptiScaler + FSR 4 실시간 연동 정상화 (`py_modules/manager.py`, `py_modules/optiscaler_setup.py`)**:
+  1. **드롭다운 선택 값 반영 및 상태 유지 버그 수정 (`src/index.tsx`)**:
+     - Steam Decky UI의 `DropdownItem` 콜백에서 `option.data`와 원시 값 모두 안전하게 추출하는 `getOptionValue` 도입
+     - 동일 게임 선택 상태에서 백그라운드 재조회/리렌더링 시 사용자가 수동 선택한 업스케일러 모델(`variant`) 및 OptiScaler 채널이 기본값으로 덮어씌워지던 문제 해결
+  2. **설치 방식(경로) UI 통일 및 명확화**:
+     - 단일 경로만 지원되는 게임의 경우에도 상단 드롭다운에 `Direct (단일 지원)` 또는 `OptiScaler 프록시 (단일 지원)` 형태로 명확히 배치하여 사용자가 현재 적용 방식을 직관적으로 인지할 수 있도록 개선
+     - 복수 지원 게임은 `Direct`와 `OptiScaler` 간 실시간 선택 지원
+  3. **UI 간소화 및 불필요한 설명 텍스트 제거**:
+     - Steam Deck QAM 오버레이 환경에 맞추어 드롭다운 하단의 불필요하고 긴 안내 문구(모델 설명, 빌드 설명, 실행 파일 설명 등) 전면 정리
+     - '다음 단계' 안내 카드 및 게임 세부 정보의 중복 설명 텍스트를 간결하고 직관적으로 축약
+  4. **OptiScaler + FSR 4 실시간 연동 정상화 (`py_modules/manager.py`, `py_modules/optiscaler_setup.py`)**:
      - FSR 4 선택 시 `OptiScaler.ini`의 `FfxDx12Path` 및 `FfxDx12SRPath`를 `HelixSR/my-fsr/amd_fidelityfx_upscaler_dx12.dll`로 직접 연결하여 OptiScaler에서 선택한 FSR 4가 실제로 동작하도록 수정
      - `setup_report`에서 HelixSR 및 FSR 4 제공자 경로를 모두 유효한 설정으로 검증
-  3. **HelixSR + FSR 4 모델 선택 및 동시 준비 지원**:
+  5. **HelixSR + FSR 4 모델 선택 및 동시 준비 지원**:
      - 기존 HelixSR 모델 외에 `FSR 4.1.1 iGPU Exact` 및 `Lossy` 2종 선택 지원
      - FSR 4 패키지 준비 시 Exact와 Lossy를 동시 빌드·캐싱하여 즉시 전환 지원
   4. **적용 방식(Integration Route) 사용자 선택 지원**:
@@ -122,4 +127,4 @@ npm run test:frontend
 ```powershell
 py scripts/package.py
 ```
-- 생성 위치: 상위 폴더(`../Upscaler-Decky-0.1.24.zip`) 및 `release/Upscaler-Decky-0.1.24.zip`
+- 생성 위치: 상위 폴더(`../Upscaler-Decky-0.1.25.zip`) 및 `release/Upscaler-Decky-0.1.25.zip`
