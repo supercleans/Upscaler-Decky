@@ -44,9 +44,10 @@ type Game = { id: string; name: string; folder: string; source: string; compatib
   installation_status?: { state: "ready" | "running" | "review" | "unsupported" | "recovery"; label: string; summary: string;
     running: boolean; selectable: boolean; can_modify: boolean; can_restore?: boolean; issues: {code: string; title: string; reason: string; steps: string[]; blocking: boolean}[] };
   appid?: string;
-  reasons: string[]; route: string | null; inputs: string[]; managed: boolean; enabled: boolean;
+  reasons: string[]; route: string | null; available_routes?: string[]; inputs: string[]; managed: boolean; enabled: boolean;
   legacy: boolean; recovery_available?: boolean; installed_version?: string; package_version?: string; dx12_confirmation_needed: boolean;
   main_exe?: string; target?: string; installed_model?: string; installed_variant?: string;
+  installed_optiscaler?: string; installed_optiscaler_channel?: string;
   executable_choices?: { path: string; dx12: boolean }[]; selected_executable?: string; executable_selection_needed?: boolean;
   awareness_warnings?: string[];
   awareness_deferred?: boolean;
@@ -57,31 +58,35 @@ type Game = { id: string; name: string; folder: string; source: string; compatib
   launch_options: string; logs?: { path: string; modified: number; excerpt: string }[] };
 type Release = { version?: string; error?: string; checked_at?: number; page?: string };
 type ModelCatalog = { variants: { id: string; label: string; source: string }[]; default: string; note: string };
+type OptiScalerCatalog = { channels: { id: string; label: string; source: string }[]; default: string };
 type Job = { id: string; kind: string; game: string; state: string; message: string; log: string };
 type LauncherImport = { launcher: string; found: number; added: number; candidates: number;
   unavailable: number; game_ids: string[]; warnings: string[] };
 type Library = { games: Game[]; warnings: string[]; release: Release; license_accepted: boolean; jobs: Job[];
-  launcher_import?: LauncherImport; model_catalog?: ModelCatalog };
+  launcher_import?: LauncherImport; model_catalog?: ModelCatalog;
+  optiscaler_catalog?: OptiScalerCatalog; optiscaler_nightly_release?: Release };
 type Preview = { token: string; name: string; action: string; route: string; files: string[];
-  warning: string; select_upscaler: string; model?: string; variant_id?: string; release_version?: string; selected_executable?: string };
+  warning: string; select_upscaler: string; model?: string; variant_id?: string; release_version?: string;
+  optiscaler_channel?: string; optiscaler_label?: string; optiscaler_version?: string; selected_executable?: string };
 const library = callable<[], Library>("library");
-const details = callable<[string, string?], Game>("game_details");
-const checkUpdates = callable<[boolean], Release>("check_updates");
+const details = callable<[string, string?, string?], Game>("game_details");
+const checkUpdates = callable<[boolean, string?], Release>("check_updates");
+const checkOptiScalerNightlyUpdate = callable<[boolean], Release>("check_optiscaler_nightly_update");
 const forgetGame = callable<[string], Library>("forget_game");
 const importFolders = callable<[string[]], Library>("import_folders");
 const importLauncher = callable<[string], Library>("import_launcher");
 const setLicense = callable<[boolean, string?], boolean>("set_license");
 const jobStatus = callable<[], Job[]>("job_status");
 const cancelJob = callable<[string], boolean>("cancel_job");
-const previewAction = callable<[string, string, boolean, string?], Preview>("preview_action");
+const previewAction = callable<[string, string, boolean, string?, string?, string?], Preview>("preview_action");
 const applyAction = callable<[string], { message: string }>("apply_action");
-const previewLatest = callable<[string, boolean, string?, string?], Preview>("preview_latest");
+const previewLatest = callable<[string, boolean, string?, string?, string?, string?], Preview>("preview_latest");
 const installLatest = callable<[string], Job>("install_latest");
 type OverlayStatus = { enabled: boolean; game_id: string | null;
   overlay: {state: string; label: string; detail: string; responding: boolean; visible_verified: boolean};
   runtime: {state: string; label: string; detail: string; observed_at?: number; version?: string; model?: string} };
 const overlayStatus = callable<[], OverlayStatus>("overlay_status");
-const setStatusOverlay = callable<[string | null, boolean, string?], OverlayStatus>("set_status_overlay");
+const setStatusOverlay = callable<[string | null, boolean, string?, string?], OverlayStatus>("set_status_overlay");
 let latestOverlayStatus: OverlayStatus | undefined;
 let overlayTimer: ReturnType<typeof setInterval> | undefined;
 let overlayPolling = false;
@@ -243,6 +248,7 @@ function Content() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [dx12, setDx12] = useState(false);
   const [variant, setVariant] = useState<string>();
+  const [optiChannel, setOptiChannel] = useState<string>();
   const [diagnostics, setDiagnostics] = useState(false);
   const [discoveryNotes, setDiscoveryNotes] = useState(false);
   const [setupOptions, setSetupOptions] = useState(false);
@@ -255,6 +261,7 @@ function Content() {
   const [pluginInstallMessage, setPluginInstallMessage] = useState(pluginInstaller.message);
   const selectedRef = useRef(selected);
   const executableRef = useRef<string | undefined>(undefined);
+  const routeRef = useRef<string | undefined>(undefined);
   selectedRef.current = selected;
 
   useEffect(() => {
@@ -276,7 +283,10 @@ function Content() {
     return () => { interactionListeners.delete(changed); };
   }, []);
   useEffect(() => {
-    const changed = (id: string) => { if (selectedRef.current !== id) executableRef.current = undefined; selectedRef.current = id; select(id); };
+    const changed = (id: string) => {
+      if (selectedRef.current !== id) { executableRef.current = undefined; routeRef.current = undefined; }
+      selectedRef.current = id; select(id);
+    };
     selectionListeners.add(changed); changed(lastSelected);
     return () => { selectionListeners.delete(changed); };
   }, []);
@@ -323,12 +333,15 @@ function Content() {
     let active = true;
     setGame(undefined); setDx12(false); setDiagnostics(false);
     const current = data?.games.find(g => g.id === selected);
-    if (current?.managed || current?.route !== "optiscaler") executableRef.current = undefined;
+    if (current?.managed) routeRef.current = undefined;
+    const effectiveRoute = routeRef.current || current?.route;
+    if (current?.managed || effectiveRoute !== "optiscaler") executableRef.current = undefined;
     // This effect alone owns selection scans, including refreshes of the same
     // selected game. Wait for the library instead of queuing a duplicate scan.
     const requestedExecutable = executableRef.current;
-    if (selected && current) void run(() => details(selected, requestedExecutable)).then(g => {
-      if (g && active && selectedRef.current === selected && executableRef.current === requestedExecutable) setGame(g);
+    const requestedRoute = routeRef.current;
+    if (selected && current) void run(() => requestedRoute !== undefined ? details(selected, requestedExecutable, requestedRoute) : details(selected, requestedExecutable)).then(g => {
+      if (g && active && selectedRef.current === selected && executableRef.current === requestedExecutable && routeRef.current === requestedRoute) setGame(g);
     });
     return () => { active = false; };
   }, [selected, data?.games]);
@@ -336,10 +349,30 @@ function Content() {
     setVariant(game?.installed_variant || data?.model_catalog?.default);
   }, [game?.id, game?.installed_variant, data?.model_catalog?.default]);
   useEffect(() => {
+    setOptiChannel(game?.installed_optiscaler_channel || data?.optiscaler_catalog?.default);
+  }, [game?.id, game?.installed_optiscaler_channel, data?.optiscaler_catalog?.default]);
+  useEffect(() => {
     const changed = (next: Job[], finished: boolean) => { setJobs(next); if (finished) void refresh(); };
     jobListeners.add(changed); setJobs(watchedJobs);
     return () => { jobListeners.delete(changed); };
   }, []);
+
+  async function chooseRoute(nextRoute: string) {
+    if (!game || game.managed || !(game.available_routes || []).includes(nextRoute)) return;
+    const id = game.id;
+    if (latestOverlayStatus?.enabled) {
+      const stopped = await run(() => setStatusOverlay(null, false));
+      if (!stopped) return;
+      publishOverlayStatus(stopped);
+    }
+    routeRef.current = nextRoute;
+    executableRef.current = undefined;
+    setDx12(false);
+    const updated = await run(() => details(id, undefined, nextRoute));
+    if (selectedRef.current !== id || routeRef.current !== nextRoute) return;
+    if (updated) setGame(updated);
+    else { routeRef.current = undefined; setGame(undefined); }
+  }
 
   async function chooseExecutable(path: string) {
     if (!game || game.managed || game.route !== "optiscaler") return;
@@ -350,9 +383,10 @@ function Content() {
       publishOverlayStatus(stopped);
     }
     executableRef.current = path;
+    const requestedRoute = routeRef.current;
     setDx12(false);
-    const updated = await run(() => details(id, path));
-    if (selectedRef.current !== id || executableRef.current !== path) return;
+    const updated = await run(() => requestedRoute !== undefined ? details(id, path, requestedRoute) : details(id, path));
+    if (selectedRef.current !== id || executableRef.current !== path || routeRef.current !== requestedRoute) return;
     if (updated) setGame(updated);
     else { executableRef.current = undefined; setGame(undefined); }
   }
@@ -387,16 +421,30 @@ function Content() {
 
   async function installOrUpdate() {
     if (!game) return;
-    const currentRelease = await run(() => checkUpdates(true));
-    if (!currentRelease?.version || currentRelease.error) { setError(currentRelease?.error || "Could not check the latest HelixSR release. Retry Check latest HelixSR version in Updates."); return; }
-    setData(d => d ? { ...d, release: currentRelease } : d);
+    const isFsr4 = variant?.startsWith("fsr4-");
+    const currentRelease = await run(() => isFsr4 ? checkUpdates(true, variant) : checkUpdates(true));
+    if (!currentRelease?.version || currentRelease.error) { setError(currentRelease?.error || "Could not check the latest release. Retry Check latest HelixSR version in Updates."); return; }
+    if (!isFsr4) setData(d => d ? { ...d, release: currentRelease } : d);
+    if (game.route === "optiscaler" && optiChannel === "nightly") {
+      const nightlyRelease = await run(() => checkOptiScalerNightlyUpdate(true));
+      if (!nightlyRelease?.version || nightlyRelease.error) { setError(nightlyRelease?.error || "Could not check the latest OptiScaler Nightly release."); return; }
+      setData(d => d ? { ...d, optiscaler_nightly_release: nightlyRelease } : d);
+    }
     const executable = !game.managed && game.route === "optiscaler" ? game.selected_executable : undefined;
-    const p = await run(() => previewLatest(game.id, dx12, variant, executable));
+    const requestedRoute = !game.managed ? routeRef.current : undefined;
+    const defaultOpti = game.installed_optiscaler_channel || data?.optiscaler_catalog?.default || "bundled";
+    const requestedOpti = game.route === "optiscaler" && optiChannel && (optiChannel !== defaultOpti || optiChannel === "nightly") ? optiChannel : undefined;
+    const p = await run(() => requestedOpti !== undefined
+      ? previewLatest(game.id, dx12, variant, executable, requestedRoute, requestedOpti)
+      : requestedRoute !== undefined
+      ? previewLatest(game.id, dx12, variant, executable, requestedRoute)
+      : previewLatest(game.id, dx12, variant, executable));
     if (!p) return;
     openDialog(<ConfirmModal bDisableBackgroundDismiss strTitle={`${game.managed || game.legacy ? "Update" : "Install"} HelixSR ${currentRelease.version}`}
       strDescription={<div style={{ overflowWrap: "anywhere" }}>
         <p>{p.name}: {p.warning}</p>
         <p>Selected model: {p.model}. HelixSR release: {p.release_version}.</p>
+        {p.optiscaler_label && <p>OptiScaler build: {p.optiscaler_label} ({p.optiscaler_version}).</p>}
         {p.selected_executable && <p>Game executable: {p.selected_executable}</p>}
         <p>Required downloads and local preparation are automatic. Uses HelixSR freeware and NVIDIA DLSS under their linked licenses. Locally generated network files must stay on this device.</p>
         <p>Files: {p.files.join(", ")}</p>
@@ -413,7 +461,8 @@ function Content() {
   async function action(name: string) {
     if (!game) return;
     const executable = !game.managed && game.route === "optiscaler" ? game.selected_executable : undefined;
-    const p = await run(() => previewAction(game.id, name, dx12, executable));
+    const requestedRoute = !game.managed ? routeRef.current : undefined;
+    const p = await run(() => requestedRoute !== undefined ? previewAction(game.id, name, dx12, executable, requestedRoute) : previewAction(game.id, name, dx12, executable));
     if (!p) return;
     openDialog(<ConfirmModal bDisableBackgroundDismiss strTitle={`${name.toUpperCase()}: ${p.name}`}
       strDescription={<div style={{ overflowWrap: "anywhere" }}>
@@ -525,6 +574,16 @@ function Content() {
         {game.installation_status?.issues.map((issue, index) => <PanelSectionRow key={`${issue.code}-${index}`}><div className="helix-card" style={{ ...infoStyle, borderLeftColor: issue.blocking ? "#f1ca7e" : "#53c5d0" }}>
           <strong>{issue.title}</strong>{"\n"}{issue.reason}{"\n"}Next: {issue.steps.join(" ")}
         </div></PanelSectionRow>)}
+        {!game.managed && (game.available_routes?.length || 0) > 1 && <>
+          <PanelSectionRow><DropdownItem layout="below" label="Installation route" menuLabel="Choose installation route"
+            selectedOption={game.route || "direct"} strDefaultLabel="Choose installation route" disabled={disabled}
+            rgOptions={game.available_routes!.map(r => ({
+              data: r,
+              label: r === "direct" ? "Native FSR 3.1 replacement (direct)" : "OptiScaler proxy (DLSS/XeSS/FSR2)"
+            }))}
+            onChange={option => void chooseRoute(String(option.data))} /></PanelSectionRow>
+          <PanelSectionRow><div className="helix-muted">Both native FSR 3.1 and OptiScaler input DLLs were detected. Choose whether to replace the native FSR 3.1 DLL directly or install via OptiScaler proxy.</div></PanelSectionRow>
+        </>}
         {!game.managed && game.route === "optiscaler" && !!game.executable_choices?.length && (game.executable_choices.length > 1 || !game.executable_choices.some(choice => choice.path === game.selected_executable)) && <>
           <PanelSectionRow><DropdownItem layout="below" label="Game executable" menuLabel="Choose the executable you launch"
             selectedOption={game.selected_executable} strDefaultLabel="Choose a game executable" disabled={disabled}
@@ -559,7 +618,7 @@ function Content() {
       <PanelSectionRow><ToggleField label="Show HelixSR status overlay (experimental)"
         description="Checks the HUD helper and monitors new session log events. Enable before launching the game."
         checked={!!overlay?.enabled && overlay.game_id === game.id} disabled={busy || modalOpen}
-        onChange={enabled => void run(() => setStatusOverlay(game.id, enabled, executableRef.current)).then(value => { if (value) publishOverlayStatus(value); })} /></PanelSectionRow>
+        onChange={enabled => void run(() => routeRef.current !== undefined ? setStatusOverlay(game.id, enabled, executableRef.current, routeRef.current) : setStatusOverlay(game.id, enabled, executableRef.current)).then(value => { if (value) publishOverlayStatus(value); })} /></PanelSectionRow>
       {!!overlay?.enabled && overlay.game_id === game.id && <PanelSectionRow><div className="helix-card" style={infoStyle}>
         {overlay.overlay.label}{"\n"}{overlay.overlay.detail}{"\n\n"}
         {overlay.runtime.label}{"\n"}{overlay.runtime.detail}
@@ -573,6 +632,7 @@ function Content() {
         {selectedStatus?.summary}{"\n"}
         Prepared: {game.package_version || "none on this drive"}{"\n"}
         Installed model: {game.installed_model || "not installed"}{"\n"}
+        {game.route === "optiscaler" && game.installed_optiscaler ? `Installed OptiScaler: ${game.installed_optiscaler}\n` : ""}
         {game.reasons.join("\n")}
       </div></PanelSectionRow>
       {!!data?.model_catalog?.variants.length && <>
@@ -580,6 +640,12 @@ function Content() {
           selectedOption={variant || data.model_catalog.default} disabled={disabled}
           onChange={option => setVariant(String(option.data))} /></PanelSectionRow>
         <PanelSectionRow><div className="helix-muted">{data.model_catalog.note}</div></PanelSectionRow>
+      </>}
+      {game.route === "optiscaler" && !!data?.optiscaler_catalog?.channels.length && <>
+        <PanelSectionRow><DropdownItem label="OptiScaler build" rgOptions={data.optiscaler_catalog.channels.map(c => ({ label: `${c.label} · ${c.source}`, data: c.id }))}
+          selectedOption={optiChannel || data.optiscaler_catalog.default} disabled={disabled}
+          onChange={option => setOptiChannel(String(option.data))} /></PanelSectionRow>
+        <PanelSectionRow><div className="helix-muted">Choose between the bundled stable OptiScaler 0.9.4 and the official OptiScaler Nightly release (with automatic OptiScaler.ini migration).</div></PanelSectionRow>
       </>}
       <PanelSectionRow><div className="helix-muted">Downloads, required dependencies and the local network build are handled automatically. Administrator access is not needed for your own game folders.</div></PanelSectionRow>
       {game.managed && <>
@@ -707,7 +773,7 @@ export default definePlugin(() => {
     DeckyBackend.addEventListener("loader/plugin_download_finish", nativeUpdateFinished);
   }
   return ({
-  name: "HelixSR Decky", titleView: <div className={staticClasses.Title}>HelixSR Decky</div>,
+  name: "Upscaler Decky", titleView: <div className={staticClasses.Title}>Upscaler Decky</div>,
   content: <Content />, icon: <FaAdjust />, onDismount() {
     pluginDisposed = true;
     if (overlayTimer) clearInterval(overlayTimer);

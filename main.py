@@ -86,16 +86,20 @@ class Plugin:
         async with self.api_lock:
             return await asyncio.to_thread(self.manager.refresh)
 
-    async def game_details(self, gid, executable=None):
+    async def game_details(self, gid, executable=None, route=None):
         async with self.api_lock:
-            return await asyncio.to_thread(self.manager.assess_safe, self.manager.get_game(gid), executable=executable)
+            if route is None:
+                return await asyncio.to_thread(self.manager.assess_safe, self.manager.get_game(gid), executable=executable)
+            return await asyncio.to_thread(self.manager.assess_safe, self.manager.get_game(gid), executable=executable, route=route)
 
     async def overlay_status(self):
         return self.status_monitor.status()
 
-    async def set_status_overlay(self, gid, enabled, executable=None):
+    async def set_status_overlay(self, gid, enabled, executable=None, route=None):
         async with self.api_lock:
-            return await asyncio.to_thread(self.status_monitor.configure, gid, enabled, executable)
+            if route is None:
+                return await asyncio.to_thread(self.status_monitor.configure, gid, enabled, executable)
+            return await asyncio.to_thread(self.status_monitor.configure, gid, enabled, executable, route)
 
     async def import_game(self, folder, name):
         async with self.api_lock:
@@ -117,8 +121,13 @@ class Plugin:
             self._allow_game_change()
             return await asyncio.to_thread(self.manager.forget, gid)
 
-    async def check_updates(self, force=True):
-        return await asyncio.to_thread(self.manager.check_update, force)
+    async def check_updates(self, force=True, variant_id=None):
+        if variant_id is None:
+            return await asyncio.to_thread(self.manager.check_update, force)
+        return await asyncio.to_thread(self.manager.check_variant_update, variant_id, force)
+
+    async def check_optiscaler_nightly_update(self, force=True):
+        return await asyncio.to_thread(self.manager.check_optiscaler_nightly_update, bool(force))
 
     async def set_license(self, accepted, token=None):
         async with self.api_lock:
@@ -150,10 +159,12 @@ class Plugin:
             game = self.manager.get_game(gid)
             return await asyncio.to_thread(LaunchReceipts(self.manager.companion(game)).finalize, nonce, actual)
 
-    async def prepare(self, gid):
+    async def prepare(self, gid, optiscaler_channel=None):
         async with self.api_lock:
             self._allow_game_change()
-            return self.manager.start_job('prepare', gid)
+            if optiscaler_channel is None:
+                return self.manager.start_job('prepare', gid)
+            return self.manager.start_job('prepare', gid, optiscaler_channel=optiscaler_channel)
 
     async def job_status(self):
         return [dict(x) for x in self.manager.jobs.values()]
@@ -161,13 +172,25 @@ class Plugin:
     async def cancel_job(self, jid):
         return self.manager.cancel_job(jid)
 
-    async def preview_action(self, gid, action, dx12_confirmed=False, executable=None):
+    async def preview_action(self, gid, action, dx12_confirmed=False, executable=None, route=None, optiscaler_channel=None):
         async with self.api_lock:
-            return await asyncio.to_thread(self.manager.preview, gid, action, dx12_confirmed, executable)
+            if route is None and optiscaler_channel is None:
+                return await asyncio.to_thread(self.manager.preview, gid, action, dx12_confirmed, executable)
+            if optiscaler_channel is None:
+                return await asyncio.to_thread(self.manager.preview, gid, action, dx12_confirmed, executable, route)
+            return await asyncio.to_thread(
+                self.manager.preview, gid, action, dx12_confirmed, executable, route, optiscaler_channel
+            )
 
-    async def preview_latest(self, gid, dx12_confirmed=False, variant_id=None, executable=None):
+    async def preview_latest(self, gid, dx12_confirmed=False, variant_id=None, executable=None, route=None, optiscaler_channel=None):
         async with self.api_lock:
-            return await asyncio.to_thread(self.manager.preview_latest, gid, dx12_confirmed, variant_id, executable)
+            if route is None and optiscaler_channel is None:
+                return await asyncio.to_thread(self.manager.preview_latest, gid, dx12_confirmed, variant_id, executable)
+            if optiscaler_channel is None:
+                return await asyncio.to_thread(self.manager.preview_latest, gid, dx12_confirmed, variant_id, executable, route)
+            return await asyncio.to_thread(
+                self.manager.preview_latest, gid, dx12_confirmed, variant_id, executable, route, optiscaler_channel
+            )
 
     async def install_latest(self, token):
         async with self.api_lock:

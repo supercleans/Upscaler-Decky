@@ -57,7 +57,9 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(model_variants.DEFAULT_VARIANT, 'helixsr-model-e')
         self.assertEqual(catalog['default'], model_variants.DEFAULT_VARIANT)
         self.assertEqual([item['id'] for item in catalog['variants']],
-                         [model_variants.DEFAULT_VARIANT])
+                         [model_variants.DEFAULT_VARIANT,
+                          model_variants.FSR4_IGPU_EXACT,
+                          model_variants.FSR4_IGPU_LOSSY])
         selected = model_variants.select_variant()
         self.assertEqual(selected['label'], 'HelixSR Model E')
         self.assertEqual(selected['source'], 'NVIDIA DLSS 310.7.0')
@@ -380,6 +382,251 @@ class ManagerVariantTests(Fixtures):
         self.assertEqual(assessed['installed_model'], 'Model unverified')
         self.assertIsNone(assessed['installed_variant'])
         self.assertEqual(manager.sha(self.native), manager.sha(legacy / manager.DLL))
+
+
+class FSR4VariantTests(Fixtures):
+    def fsr4_archive(self, exact_bytes=None, lossy_bytes=None, tag='dll-2026-04-19.1'):
+        exact_marker = model_variants.FSR4_SPECS[model_variants.FSR4_IGPU_EXACT]['marker']
+        lossy_marker = model_variants.FSR4_SPECS[model_variants.FSR4_IGPU_LOSSY]['marker']
+        exact_bytes = exact_bytes or (pe(ffx=True) + exact_marker + b'fsr4-exact-payload' * 256)
+        lossy_bytes = lossy_bytes or (pe(ffx=True) + lossy_marker + b'fsr4-lossy-payload' * 256)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr('NOTICE.md', b'FSR 4 notice')
+            archive.writestr('exact/amd_fidelityfx_upscaler_dx12.dll', exact_bytes)
+            archive.writestr('lossy/amd_fidelityfx_upscaler_dx12.dll', lossy_bytes)
+        payload = buffer.getvalue()
+        metadata = dict(
+            version=manager.FSR4_VERSION,
+            tag=tag,
+            sha256=hashlib.sha256(payload).hexdigest(),
+            size=len(payload),
+            url=f'https://github.com/{manager.FSR4_REPO}/releases/download/{tag}/{manager.FSR4_ASSET_NAME}',
+            page=f'https://github.com/{manager.FSR4_REPO}/releases/tag/{tag}',
+            metadata_policy=manager.RELEASE_POLICY,
+        )
+        return payload, metadata, exact_bytes, lossy_bytes
+
+    def prepare_fsr4(self, variant_id, route='direct'):
+        payload, metadata, exact_bytes, lossy_bytes = self.fsr4_archive()
+        manager.atomic_json(self.m.settings / 'fsr4_release.json', metadata)
+        self.m.cfg['license'] = manager.license_key(metadata, variant_id)
+        job = {'id': f'prep-{variant_id}', 'variant_id': variant_id, 'route': route,
+               'reviewed_release': dict(metadata)}
+        with patch.object(self.m, 'check_fsr4_update', return_value=metadata), \
+                patch('manager.https_context', return_value=None), \
+                patch('manager.urllib.request.urlopen',
+                      return_value=Response(payload, metadata['url'])):
+            prepared = self.m.prepare(self.game, job)
+        return prepared, metadata, exact_bytes, lossy_bytes
+
+    def test_fsr4_variants_and_archive_verification(self):
+        for variant_id in (model_variants.FSR4_IGPU_EXACT, model_variants.FSR4_IGPU_LOSSY):
+            selected = model_variants.select_variant(variant_id)
+            self.assertEqual(selected['adapter'], model_variants.FSR4_ADAPTER)
+            self.assertTrue(model_variants.is_fsr4_variant(variant_id))
+        prepared, _meta, exact_bytes, _lossy_bytes = self.prepare_fsr4(model_variants.FSR4_IGPU_EXACT, route='direct')
+        self.assertEqual((prepared[1] / model_variants.MY_FSR_DLL).read_bytes(), exact_bytes)
+        self.assertTrue(model_variants.valid_variant(prepared[2]['variant']))
+        write(prepared[1] / model_variants.MY_FSR_DLL, exact_bytes + b'tampered')
+        with self.assertRaisesRegex(ValueError, 'does not match'):
+            model_variants.verify_fsr4_outputs(prepared[1])
+
+    def test_fsr4_direct_install_update_disable_enable_and_remove(self):
+        prepared_exact, _meta, exact_bytes, _lossy_bytes = self.prepare_fsr4(
+            model_variants.FSR4_IGPU_EXACT, route='direct')
+        data = self.m.assess(self.game)
+        self.assertEqual(data['route'], 'direct')
+        self.m.mutate(self.game, data, 'install', prepared_exact)
+        self.assertEqual(self.native.read_bytes(), exact_bytes)
+        for name in manager.NETWORK:
+            self.assertFalse((self.native.parent / name).exists())
+        assessed = self.m.assess(self.game)
+        self.assertEqual(assessed['installed_variant'], model_variants.FSR4_IGPU_EXACT)
+        self.assertEqual(assessed['installed_model'], 'FSR 4.1.1 (iGPU Exact)')
+        self.assertEqual(assessed['compatibility'], 'candidate')
+        # Switch from FSR 4 direct to HelixSR Model E direct and back cleanly
+        helix_folder = self.package()
+        self.m.mutate(self.game, self.m.assess(self.game), 'update',
+                      self.m.package(self.game, 'direct', variant_id=model_variants.DEFAULT_VARIANT))
+        self.assertEqual(manager.sha(self.native), manager.sha(helix_folder / manager.DLL))
+        for name in manager.NETWORK:
+            self.assertTrue((self.native.parent / name).is_file())
+        self.m.mutate(self.game, self.m.assess(self.game), 'update', prepared_exact)
+        self.assertEqual(self.native.read_bytes(), exact_bytes)
+        for name in manager.NETWORK:
+            self.assertFalse((self.native.parent / name).exists())
+        self.action('disable')
+        self.assertEqual(self.native.read_bytes(), self.original)
+        self.action('enable')
+        self.assertEqual(self.native.read_bytes(), exact_bytes)
+        self.action('remove')
+        self.assertEqual(self.native.read_bytes(), self.original)
+        self.assertFalse(self.m.record(self.game))
+
+    def test_fsr4_optiscaler_installs_my_fsr_and_reports_ffx_upscaler_guidance(self):
+        self.native.unlink()
+        write(self.root / 'nvngx_dlss.dll', pe())
+        self.package()
+        prepared_lossy, _meta, _exact_bytes, lossy_bytes = self.prepare_fsr4(
+            model_variants.FSR4_IGPU_LOSSY, route='optiscaler')
+        data = self.m.assess(self.game)
+        self.assertEqual(data['route'], 'optiscaler')
+        self.m.mutate(self.game, data, 'install', prepared_lossy)
+        my_fsr = self.root / 'HelixSR' / model_variants.MY_FSR_DLL
+        self.assertTrue(my_fsr.is_file())
+        self.assertEqual(my_fsr.read_bytes(), lossy_bytes)
+        assessed = self.m.assess(self.game)
+        self.assertEqual(assessed['installed_variant'], model_variants.FSR4_IGPU_LOSSY)
+        checks = '\n'.join(assessed['optiscaler']['setup']['checks'])
+        self.assertIn('FSR 4 is installed in HelixSR/my-fsr', checks)
+        self.action('disable')
+        self.assertFalse(my_fsr.exists())
+        self.assertFalse(my_fsr.parent.exists())
+        self.action('enable')
+        self.assertTrue(my_fsr.is_file())
+        self.action('remove')
+        self.assertFalse(my_fsr.exists())
+        self.assertEqual(self.m.assess(self.game)['compatibility'], 'candidate')
+
+    def test_route_selection_switches_dual_capable_game_between_direct_and_optiscaler(self):
+        write(self.root / 'nvngx_dlss.dll', pe())
+        self.package()
+        default_data = self.m.assess(self.game)
+        self.assertEqual(default_data['available_routes'], ['direct', 'optiscaler'])
+        self.assertEqual(default_data['route'], 'direct')
+        opti_data = self.m.assess(self.game, route='optiscaler')
+        self.assertEqual(opti_data['route'], 'optiscaler')
+        token = self.m.preview(self.game['id'], 'install', route='optiscaler')['token']
+        self.m.execute(token)
+        managed_data = self.m.assess(self.game)
+        self.assertTrue(managed_data['managed'])
+        self.assertEqual(managed_data['route'], 'optiscaler')
+        self.assertEqual(managed_data['available_routes'], ['optiscaler'])
+        with self.assertRaisesRegex(ValueError, 'Route selection is only available for unmanaged games'):
+            self.m.assess(self.game, route='direct')
+
+    def test_optiscaler_nightly_release_preparation_and_ini_migration(self):
+        self.native.unlink()
+        write(self.root / 'nvngx_dlss.dll', pe())
+        base_pkg, rec = self.companion_package()
+        v094_ini = (
+            '[Upscalers]\nDx11Upscaler=auto\nDx12Upscaler=auto\nVulkanUpscaler=auto\n'
+            '[Nukems]\nMakeDepthCopy=auto\n'
+            '[FSR]\nFsr4Update=auto\nFsr4ForceEnableInt8=auto\n'
+            '[NvApi]\nOverrideNvapiDll=auto\nNvapiPath=auto\n'
+            '[Menu]\nShortcutKey=auto\n'
+            '[CAS]\nEnabled=auto\nUseDepthAwareSharpen=auto\nUseDASDepthAwareSharpen=auto\n'
+            '[Paths]\nFfxDx12Path=auto\nFfxDx12SRPath=auto\nFfxDx12FGPath=auto\n'
+        )
+        write(base_pkg / 'optiscaler/OptiScaler.ini', v094_ini)
+        self.sync_package_record(base_pkg)
+        manager.atomic_json(self.m.companion(self.game) / 'records/package.json', rec)
+
+        self.action('install')
+        installed_ini = self.root / 'OptiScaler.ini'
+        self.assertIn('Dx12Upscaler=fsr31', installed_ini.read_text(encoding='utf-8'))
+        assessed_bundled = self.m.assess(self.game)
+        self.assertEqual(assessed_bundled['installed_optiscaler_channel'], 'bundled')
+        self.assertIn('0.9.4', assessed_bundled['installed_optiscaler'])
+
+        edited_094 = (
+            installed_ini.read_text(encoding='utf-8')
+            .replace('OverrideNvapiDll=auto', 'OverrideNvapiDll=false')
+            .replace('ShortcutKey=auto', 'ShortcutKey=0x24')
+        )
+        installed_ini.write_text(edited_094, encoding='utf-8')
+
+        nightly_dll = pe(dx12=True) + b'OptiScaler v10.0.0-pre1\x00'
+        nightly_ini = (
+            '[Upscalers]\nDx11Upscaler=auto\nDx12Upscaler=auto\nVulkanUpscaler=auto\n'
+            '[DLSSG]\nEnabled=auto\n'
+            '[NvngxFG]\nMakeDepthCopy=auto\n'
+            '[FSR]\nFsr4Update=auto\nFsr4ForceModel=auto\n'
+            '[fakenvapi]\nUseFakenvapi=auto\n'
+            '[NvApi]\nNvapiPath=auto\n'
+            '[Menu]\nShortcutKey=auto\n'
+            '[Sharpness]\nOverrideSharpness=auto\nShader=auto\n'
+            '[Magnifier]\nEnabled=auto\n'
+            '[Paths]\nFfxDx12Path=auto\nFfxDx12SRPath=auto\nFfxDx12FGPath=auto\n'
+        ).encode('utf-8')
+        fake_7z = b'7z\xbc\xaf\x27\x1cfake-nightly-archive'
+        fake_7z_sha = hashlib.sha256(fake_7z).hexdigest()
+        api_payload = [
+            {
+                'draft': False,
+                'prerelease': True,
+                'tag_name': 'nightly-20261012',
+                'html_url': 'https://github.com/optiscaler/OptiScaler-nightly/releases/tag/nightly-20261012',
+                'assets': [
+                    {
+                        'id': 555,
+                        'name': 'OptiScaler_v10.0.0-pre1_20261012.7z',
+                        'browser_download_url': 'https://github.com/optiscaler/OptiScaler-nightly/releases/download/nightly-20261012/OptiScaler_v10.0.0-pre1_20261012.7z',
+                        'digest': 'sha256:' + fake_7z_sha,
+                        'size': len(fake_7z),
+                        'updated_at': '2026-10-12T00:00:00Z',
+                    }
+                ],
+            }
+        ]
+
+        class FakeResponse(io.BytesIO):
+            headers = {'ETag': '"opti-nightly-etag"'}
+            def __init__(self, body, url):
+                super().__init__(body)
+                self._url = url
+            def geturl(self):
+                return self._url
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+
+        def fake_urlopen(req, **_kwargs):
+            url = req.full_url if hasattr(req, 'full_url') else str(req)
+            if url == manager.OPTISCALER_NIGHTLY_API:
+                return FakeResponse(json.dumps(api_payload).encode('utf-8'), url)
+            return FakeResponse(fake_7z, url)
+
+        def fake_extract_7z(_archive, destination):
+            destination.mkdir(parents=True, exist_ok=True)
+            write(destination / 'OptiScaler.dll', nightly_dll)
+            write(destination / 'OptiScaler.ini', nightly_ini)
+
+        with patch('manager.urllib.request.urlopen', side_effect=fake_urlopen), \
+                patch('manager.safe_extract_7z', side_effect=fake_extract_7z):
+            nightly_meta = self.m.check_optiscaler_nightly_update(force=True)
+            self.assertEqual(nightly_meta['version'], '10.0.0-pre1+20261012')
+            base_tuple = self.m.package(self.game, 'optiscaler', optiscaler_channel='bundled')
+            job = {'id': 'jobnightly1234', 'variant_id': model_variants.DEFAULT_VARIANT,
+                   'optiscaler_channel': 'nightly', 'route': 'optiscaler', 'message': ''}
+            prepared_nightly = self.m._prepare_optiscaler_nightly(self.game, job, base_tuple, nightly_meta)
+
+        self.assertEqual(
+            self.m.package(self.game, 'optiscaler', optiscaler_channel='nightly')[1],
+            prepared_nightly[1],
+        )
+        token = self.m.preview(self.game['id'], 'update', optiscaler_channel='nightly')['token']
+        self.m.execute(token)
+
+        migrated_ini = installed_ini.read_text(encoding='utf-8')
+        self.assertIn('Dx12Upscaler=ffx', migrated_ini)
+        self.assertIn('[fakenvapi]\nUseFakenvapi=false', migrated_ini)
+        self.assertIn('ShortcutKey=0x24', migrated_ini)
+        self.assertIn('[Magnifier]\nEnabled=auto', migrated_ini)
+        assessed_nightly = self.m.assess(self.game)
+        self.assertEqual(assessed_nightly['installed_optiscaler_channel'], 'nightly')
+        self.assertIn('OptiScaler Nightly', assessed_nightly['installed_optiscaler'])
+        self.assertTrue(assessed_nightly['optiscaler']['helix_configured'])
+
+        token_back = self.m.preview(self.game['id'], 'update', optiscaler_channel='bundled')['token']
+        self.m.execute(token_back)
+        restored_094_ini = installed_ini.read_text(encoding='utf-8')
+        self.assertIn('Dx12Upscaler=fsr31', restored_094_ini)
+        self.assertIn('[NvApi]\nOverrideNvapiDll=false', restored_094_ini)
+        self.assertIn('ShortcutKey=0x24', restored_094_ini)
+        self.assertEqual(self.m.assess(self.game)['installed_optiscaler_channel'], 'bundled')
 
 
 if __name__ == '__main__':

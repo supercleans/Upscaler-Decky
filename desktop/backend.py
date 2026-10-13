@@ -93,9 +93,11 @@ class DesktopBackend:
         self._open()
         return self.status_monitor.status()
 
-    def set_status_overlay(self, gid, enabled, executable=None):
+    def set_status_overlay(self, gid, enabled, executable=None, route=None):
         self._open()
-        return self.status_monitor.configure(gid, enabled, executable)
+        if route is None:
+            return self.status_monitor.configure(gid, enabled, executable)
+        return self.status_monitor.configure(gid, enabled, executable, route)
 
     def _open(self):
         if self.closed:
@@ -113,15 +115,24 @@ class DesktopBackend:
             result['warnings'] = self.warnings + result.get('warnings', [])
             return result
 
-    def details(self, gid, executable=None):
+    def details(self, gid, executable=None, route=None):
         with self.lock:
             self._open()
-            return self.manager.assess_safe(self.manager.get_game(gid), executable=executable)
+            if route is None:
+                return self.manager.assess_safe(self.manager.get_game(gid), executable=executable)
+            return self.manager.assess_safe(self.manager.get_game(gid), executable=executable, route=route)
 
-    def check_helix_updates(self, force=True):
+    def check_helix_updates(self, force=True, variant_id=None):
         with self.lock:
             self._open()
-            return self.manager.check_update(bool(force))
+            if variant_id is None:
+                return self.manager.check_update(bool(force))
+            return self.manager.check_variant_update(variant_id, bool(force))
+
+    def check_optiscaler_nightly_update(self, force=True):
+        with self.lock:
+            self._open()
+            return self.manager.check_optiscaler_nightly_update(bool(force))
 
     def accept_license(self, accepted, token=None):
         if type(accepted) is not bool:
@@ -130,20 +141,28 @@ class DesktopBackend:
             self._write()
             return self.manager.accept_license(accepted, token)
 
-    def preview_latest(self, gid, dx12_confirmed=False, variant_id=None, executable=None):
+    def preview_latest(self, gid, dx12_confirmed=False, variant_id=None, executable=None, route=None, optiscaler_channel=None):
         with self.lock:
             self._open()
-            return self.manager.preview_latest(gid, dx12_confirmed, variant_id, executable)
+            if route is None and optiscaler_channel is None:
+                return self.manager.preview_latest(gid, dx12_confirmed, variant_id, executable)
+            if optiscaler_channel is None:
+                return self.manager.preview_latest(gid, dx12_confirmed, variant_id, executable, route)
+            return self.manager.preview_latest(gid, dx12_confirmed, variant_id, executable, route, optiscaler_channel)
 
     def install_latest(self, token):
         with self.lock:
             self._write()
             return self.manager.execute_latest(token)
 
-    def preview_action(self, gid, action, dx12_confirmed=False, executable=None):
+    def preview_action(self, gid, action, dx12_confirmed=False, executable=None, route=None, optiscaler_channel=None):
         with self.lock:
             self._open()
-            return self.manager.preview(gid, action, dx12_confirmed, executable)
+            if route is None and optiscaler_channel is None:
+                return self.manager.preview(gid, action, dx12_confirmed, executable)
+            if optiscaler_channel is None:
+                return self.manager.preview(gid, action, dx12_confirmed, executable, route)
+            return self.manager.preview(gid, action, dx12_confirmed, executable, route, optiscaler_channel)
 
     def apply_action(self, token):
         with self.lock:

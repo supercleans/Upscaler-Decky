@@ -233,6 +233,16 @@ class MainWindow(QMainWindow):
         self.game_guide = link_label('', self._notify)
         self.game_guide.setWordWrap(True)
         content.addWidget(self.game_guide)
+        self.route_label = QLabel("Installation route")
+        content.addWidget(self.route_label)
+        self.routes = QComboBox()
+        self.routes.setObjectName("routes")
+        self.routes.setMinimumHeight(40)
+        self.routes.currentIndexChanged.connect(self.select_route)
+        content.addWidget(self.routes)
+        self.route_note = QLabel("Both native FSR 3.1 and OptiScaler input DLLs were detected. Choose whether to replace the native FSR 3.1 DLL directly or install via OptiScaler proxy.")
+        self.route_note.setWordWrap(True)
+        content.addWidget(self.route_note)
         self.executable_label = QLabel("Game executable")
         content.addWidget(self.executable_label)
         self.executables = QComboBox()
@@ -252,6 +262,16 @@ class MainWindow(QMainWindow):
         self.model_note.setWordWrap(True)
         self.model_note.setTextFormat(Qt.PlainText)
         content.addWidget(self.model_note)
+        self.optiscaler_label = QLabel("OptiScaler build")
+        content.addWidget(self.optiscaler_label)
+        self.optiscaler_channels = QComboBox()
+        self.optiscaler_channels.setObjectName("optiscaler_channels")
+        self.optiscaler_channels.setMinimumHeight(40)
+        content.addWidget(self.optiscaler_channels)
+        self.optiscaler_note = QLabel("Choose between the bundled stable OptiScaler 0.9.4 and the official OptiScaler Nightly release (with automatic OptiScaler.ini migration).")
+        self.optiscaler_note.setWordWrap(True)
+        self.optiscaler_note.setTextFormat(Qt.PlainText)
+        content.addWidget(self.optiscaler_note)
         self.dx12 = QCheckBox("I have set this game to DirectX 12")
         self.dx12.toggled.connect(self._controls)
         content.addWidget(self.dx12)
@@ -406,7 +426,7 @@ class MainWindow(QMainWindow):
     def _task_finished(self):
         # A QObject receiver provides an explicit GUI-thread context. Do not
         # connect finished to a closure retaining the worker and its payload.
-        result = self._take_task_result()
+        result = _take = self._take_task_result()
         if result is None:
             return
         value, error, done = result
@@ -428,8 +448,15 @@ class MainWindow(QMainWindow):
         active = any(j.get("state") in ACTIVE for j in self._jobs)
         free = not (self._task or self._modal or self._closing or active)
         game = self.game or {}
-        for control in (self.games, self.executables, self.models, self.refresh_button, self.launchers, self.import_button, self.folder_button, self.helix_check, self.app_check, self.auto_check, self.diagnostic_button):
+        for control in (self.games, self.routes, self.executables, self.models, self.optiscaler_channels, self.refresh_button, self.launchers, self.import_button, self.folder_button, self.helix_check, self.app_check, self.auto_check, self.diagnostic_button):
             control.setEnabled(free)
+        routes = game.get("available_routes") or []
+        show_routes = not game.get("managed") and len(routes) > 1
+        for control in (self.route_label, self.routes, self.route_note):
+            control.setVisible(show_routes)
+        show_optiscaler_channels = game.get("route") == "optiscaler" and self.optiscaler_channels.count() > 0
+        for control in (self.optiscaler_label, self.optiscaler_channels, self.optiscaler_note):
+            control.setVisible(show_optiscaler_channels)
         choices = game.get("executable_choices", [])
         show_executable = not game.get("managed") and game.get("route") == "optiscaler" and bool(choices) and (len(choices) > 1 or not any(e['path'] == game.get('selected_executable') for e in choices))
         for control in (self.executable_label, self.executables, self.executable_note):
@@ -510,6 +537,10 @@ class MainWindow(QMainWindow):
         for model in models.get("variants", []):
             self.models.addItem(f"{model['label']} · {model['source']}", model['id'])
         self.model_note.setText(models.get("note", ""))
+        opti_catalog = value.get("optiscaler_catalog") or {}
+        self.optiscaler_channels.clear()
+        for channel in opti_catalog.get("channels", []):
+            self.optiscaler_channels.addItem(f"{channel['label']} · {channel['source']}", channel['id'])
         self._jobs_received(value.get("jobs", []))
         self.select_game()
         warnings = [str(warning) for warning in value.get("warnings", [])]
@@ -531,6 +562,7 @@ class MainWindow(QMainWindow):
     def select_game(self, *_):
         prior = (self._overlay_snapshot or {}).get('game_id')
         self.game = self._games.get(self.games.currentData())
+        self._selected_route = None
         self.dx12.setChecked(False)
         self._render_game()
         if prior and prior != self.games.currentData() and (self._overlay_snapshot or {}).get('enabled'):
@@ -542,16 +574,33 @@ class MainWindow(QMainWindow):
             gid = self.game["id"]
             self._run(lambda: self.backend.details(gid), lambda value: self._details_received(gid, value))
 
+    def select_route(self, *_):
+        if not self.game or self.game.get("managed"):
+            return
+        gid, route = self.game["id"], self.routes.currentData()
+        if not route or route == self.game.get("route") or route not in (self.game.get("available_routes") or []):
+            return
+        self._selected_route = route
+        self.dx12.setChecked(False)
+        def change():
+            if (self._overlay_snapshot or {}).get('enabled'):
+                self.backend.set_status_overlay(None, False)
+            return self.backend.details(gid, None, route)
+        self._run(change, lambda value: self._details_received(gid, value, reset_model=False))
+
     def select_executable(self, *_):
         if not self.game or self.game.get("managed") or self.game.get("route") != "optiscaler":
             return
         gid, executable = self.game["id"], self.executables.currentData()
         if not executable or executable == self.game.get("selected_executable"):
             return
+        route = getattr(self, "_selected_route", None)
         self.dx12.setChecked(False)
         def change():
             if (self._overlay_snapshot or {}).get('enabled'):
                 self.backend.set_status_overlay(None, False)
+            if route is not None:
+                return self.backend.details(gid, executable, route)
             return self.backend.details(gid, executable)
         self._run(change, lambda value: self._details_received(gid, value, reset_model=False))
 
@@ -568,6 +617,13 @@ class MainWindow(QMainWindow):
 
     def _render_game(self, reset_model=True):
         game = self.game or {}
+        self.routes.blockSignals(True)
+        self.routes.clear()
+        for r in game.get("available_routes") or []:
+            label = "Native FSR 3.1 replacement (direct)" if r == "direct" else "OptiScaler proxy (DLSS/XeSS/FSR2)"
+            self.routes.addItem(label, r)
+        self.routes.setCurrentIndex(max(0, self.routes.findData(game.get("route"))))
+        self.routes.blockSignals(False)
         self.executables.blockSignals(True)
         self.executables.clear()
         for executable in game.get("executable_choices", []):
@@ -576,11 +632,14 @@ class MainWindow(QMainWindow):
         self.executables.setCurrentIndex(self.executables.findData(game.get("selected_executable")))
         self.executables.blockSignals(False)
         state, recorded, color = game_status(game)
+        opti_line = f"Installed OptiScaler: {game['installed_optiscaler']}\n" if game.get("route") == "optiscaler" and game.get("installed_optiscaler") else ""
         self.status.setText(f"HelixSR: {state} · Version: {game.get('installed_version') or 'none'}\n"
                             + (recorded + '\n' if recorded else '') +
-                            f"Installed model: {game.get('installed_model') or 'not installed'}\n{game.get('folder', '')}")
+                            f"Installed model: {game.get('installed_model') or 'not installed'}\n"
+                            + opti_line + f"{game.get('folder', '')}")
         if reset_model:
             self.models.setCurrentIndex(max(0, self.models.findData(game.get('installed_variant'))))
+            self.optiscaler_channels.setCurrentIndex(max(0, self.optiscaler_channels.findData(game.get('installed_optiscaler_channel'))))
         self.status.setStyleSheet(f"color: {color}")
         report = game.get('installation_status') or {}
         issues = report.get('issues') or []
@@ -622,13 +681,26 @@ class MainWindow(QMainWindow):
         if self.game and self.install.isEnabled():
             gid, confirmed, model = self.game["id"], self.dx12.isChecked(), self.models.currentData()
             executable = self.game.get("selected_executable") if not self.game.get("managed") and self.game.get("route") == "optiscaler" else None
-            self._run(lambda: self.backend.preview_latest(gid, confirmed, model, executable), lambda p: self._preview_received(p, True))
+            route = getattr(self, "_selected_route", None) if not self.game.get("managed") else None
+            opti_channel = self.optiscaler_channels.currentData() if self.game.get("route") == "optiscaler" else None
+            default_opti = self.game.get("installed_optiscaler_channel") or "bundled"
+            requested_opti = opti_channel if opti_channel and (opti_channel != default_opti or opti_channel == "nightly") else None
+            if requested_opti is not None:
+                self._run(lambda: self.backend.preview_latest(gid, confirmed, model, executable, route, requested_opti), lambda p: self._preview_received(p, True))
+            elif route is not None:
+                self._run(lambda: self.backend.preview_latest(gid, confirmed, model, executable, route), lambda p: self._preview_received(p, True))
+            else:
+                self._run(lambda: self.backend.preview_latest(gid, confirmed, model, executable), lambda p: self._preview_received(p, True))
 
     def preview_action(self, action):
         if self.game and self.actions[action].isEnabled():
             gid, confirmed = self.game["id"], self.dx12.isChecked()
             executable = self.game.get("selected_executable") if not self.game.get("managed") and self.game.get("route") == "optiscaler" else None
-            self._run(lambda: self.backend.preview_action(gid, action, confirmed, executable), lambda p: self._preview_received(p, False))
+            route = getattr(self, "_selected_route", None) if not self.game.get("managed") else None
+            if route is not None:
+                self._run(lambda: self.backend.preview_action(gid, action, confirmed, executable, route), lambda p: self._preview_received(p, False))
+            else:
+                self._run(lambda: self.backend.preview_action(gid, action, confirmed, executable), lambda p: self._preview_received(p, False))
 
     def _preview_received(self, preview, latest):
         if self._modal or self._closing:
@@ -667,7 +739,9 @@ class MainWindow(QMainWindow):
             return
         gid = self.game['id'] if enabled else None
         executable = self.game.get('selected_executable') if enabled and not self.game.get('managed') and self.game.get('route') == 'optiscaler' else None
-        if not self._run(lambda: self.backend.set_status_overlay(gid, enabled, executable), self._overlay_received):
+        route = getattr(self, '_selected_route', None) if enabled and not self.game.get('managed') else None
+        call = (lambda: self.backend.set_status_overlay(gid, enabled, executable, route)) if route is not None else (lambda: self.backend.set_status_overlay(gid, enabled, executable))
+        if not self._run(call, self._overlay_received):
             self.poll_overlay()
 
     def _overlay_received(self, value):

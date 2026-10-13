@@ -79,7 +79,7 @@ def archive_bytes(folder, version="0.1.1", extra=None, omit=()):
             "api_version": 1,
         }).encode(),
         f"{plugin_updates.FOLDER}/package.json": json.dumps({
-            "name": "helixsr-decky",
+            "name": plugin_updates.PACKAGE_NAME,
             "version": version,
         }).encode(),
         f"{plugin_updates.FOLDER}/dist/index.js": b"export {};\n",
@@ -256,7 +256,7 @@ class StagingTests(PluginUpdateFixtures):
         item = release('0.1.1', len(payload), digest)
         updater = self.updater()
         updater.stage.mkdir()
-        corrupt = updater.stage / f'HelixSR-Decky-0.1.1-{digest}.zip'
+        corrupt = updater.stage / f'{plugin_updates.FOLDER}-0.1.1-{digest}.zip'
         corrupt.write_bytes(b'corrupt')
         with patch('plugin_updates.shutil.disk_usage', return_value=SimpleNamespace(free=1 << 30)), patch(
                 'plugin_updates.urllib.request.urlopen', side_effect=(self.metadata_response(item),
@@ -273,7 +273,7 @@ class StagingTests(PluginUpdateFixtures):
         digest = hashlib.sha256(payload).hexdigest()
         updater = self.updater()
         updater.stage.mkdir()
-        owned = updater.stage / f'HelixSR-Decky-0.1.0-{digest}.zip'
+        owned = updater.stage / f'{plugin_updates.FOLDER}-0.1.0-{digest}.zip'
         owned.write_bytes(payload)
         unrelated = updater.stage / 'personal.zip'
         unrelated.write_bytes(b'preserve')

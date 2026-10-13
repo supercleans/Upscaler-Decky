@@ -6,7 +6,15 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'py_modules'))
-from optiscaler_setup import configuration, override_status, pin_config, setup_report
+from optiscaler_setup import (
+    config_generation,
+    configuration,
+    default_dx12_upscaler,
+    migrate_config,
+    override_status,
+    pin_config,
+    setup_report,
+)
 
 
 class SetupTests(unittest.TestCase):
@@ -99,6 +107,84 @@ class SetupTests(unittest.TestCase):
         report = self.report()
         self.assertFalse(report['configured'])
         self.assertIn('Repeated setting', '\n'.join(report['checks']))
+
+    def test_nightly_config_migration_and_bidirectional_pinning(self):
+        v094_template = (
+            '[Upscalers]\nDx11Upscaler=auto\nDx12Upscaler=auto\nVulkanUpscaler=auto\n'
+            '[Nukems]\nMakeDepthCopy=auto\n'
+            '[FSR]\nFsr4Update=auto\nFsr4ForceEnableInt8=auto\n'
+            '[NvApi]\nOverrideNvapiDll=auto\nNvapiPath=auto\n'
+            '[Menu]\nShortcutKey=auto\n'
+            '[CAS]\nEnabled=auto\nUseDepthAwareSharpen=auto\nUseDASDepthAwareSharpen=auto\n'
+            '[Paths]\nFfxDx12Path=auto\nFfxDx12SRPath=auto\nFfxDx12FGPath=auto\n'
+        )
+        nightly_template = (
+            '[Upscalers]\nDx11Upscaler=auto\nDx12Upscaler=auto\nVulkanUpscaler=auto\n'
+            '[DLSSG]\nEnabled=auto\n'
+            '[NvngxFG]\nMakeDepthCopy=auto\n'
+            '[FSR]\nFsr4Update=auto\nFsr4ForceModel=auto\n'
+            '[fakenvapi]\nUseFakenvapi=auto\n'
+            '[NvApi]\nNvapiPath=auto\n'
+            '[Menu]\nShortcutKey=auto\n'
+            '[Sharpness]\nOverrideSharpness=auto\nShader=auto\n'
+            '[Magnifier]\nEnabled=auto\n'
+            '[Paths]\nFfxDx12Path=auto\nFfxDx12SRPath=auto\nFfxDx12FGPath=auto\n'
+        )
+        self.assertEqual(config_generation(v094_template), '0.9.4')
+        self.assertEqual(config_generation(nightly_template), 'nightly')
+        self.assertEqual(default_dx12_upscaler(v094_template), 'fsr31')
+        self.assertEqual(default_dx12_upscaler(nightly_template), 'ffx')
+
+        customized_094 = (
+            v094_template
+            .replace('Dx11Upscaler=auto', 'Dx11Upscaler=fsr31_12')
+            .replace('Dx12Upscaler=auto', 'Dx12Upscaler=fsr31')
+            .replace('VulkanUpscaler=auto', 'VulkanUpscaler=fsr31')
+            .replace('MakeDepthCopy=auto', 'MakeDepthCopy=true')
+            .replace('Fsr4ForceEnableInt8=auto', 'Fsr4ForceEnableInt8=true')
+            .replace('OverrideNvapiDll=auto', 'OverrideNvapiDll=false')
+            .replace('ShortcutKey=auto', 'ShortcutKey=0x24')
+            .replace('UseDepthAwareSharpen=auto', 'UseDepthAwareSharpen=true')
+            .replace('UseDASDepthAwareSharpen=auto', 'UseDASDepthAwareSharpen=true')
+        )
+        nightly_settings = [
+            ('Dx12Upscaler', default_dx12_upscaler(nightly_template)),
+            ('FfxDx12Path', self.settings[1][1]),
+            ('FfxDx12SRPath', self.settings[2][1]),
+        ]
+        pinned_nightly = pin_config(customized_094, nightly_template, nightly_settings)
+        self.assertIn('Dx11Upscaler=ffx_12', pinned_nightly)
+        self.assertIn('Dx12Upscaler=ffx', pinned_nightly)
+        self.assertIn('VulkanUpscaler=ffx', pinned_nightly)
+        self.assertIn('[NvngxFG]\nMakeDepthCopy=true', pinned_nightly)
+        self.assertIn('Fsr4ForceModel=2', pinned_nightly)
+        self.assertIn('[fakenvapi]\nUseFakenvapi=false', pinned_nightly)
+        self.assertIn('ShortcutKey=0x24', pinned_nightly)
+        self.assertIn('Shader=lcda', pinned_nightly)
+        self.assertIn('[Magnifier]\nEnabled=auto', pinned_nightly)
+
+        self.config.write_text(pinned_nightly)
+        report = self.report()
+        self.assertTrue(report['configured'])
+        self.assertEqual(report['optiscaler_schema'], 'nightly')
+        self.assertIn('Automatic fakenvapi/NVAPI handling is disabled', '\n'.join(report['checks']))
+        self.assertIn('OptiScaler Nightly (v10+) configuration detected', '\n'.join(report['checks']))
+
+        v094_settings = [
+            ('Dx12Upscaler', default_dx12_upscaler(v094_template)),
+            ('FfxDx12Path', self.settings[1][1]),
+            ('FfxDx12SRPath', self.settings[2][1]),
+        ]
+        pinned_back_094 = pin_config(pinned_nightly, v094_template, v094_settings)
+        self.assertIn('Dx11Upscaler=fsr31_12', pinned_back_094)
+        self.assertIn('Dx12Upscaler=fsr31', pinned_back_094)
+        self.assertIn('VulkanUpscaler=fsr31', pinned_back_094)
+        self.assertIn('[Nukems]\nMakeDepthCopy=true', pinned_back_094)
+        self.assertIn('Fsr4ForceEnableInt8=true', pinned_back_094)
+        self.assertIn('[NvApi]\nOverrideNvapiDll=false', pinned_back_094)
+        self.assertIn('ShortcutKey=0x24', pinned_back_094)
+        self.assertIn('UseDepthAwareSharpen=true', pinned_back_094)
+        self.assertIn('UseDASDepthAwareSharpen=true', pinned_back_094)
 
 
 if __name__ == '__main__':

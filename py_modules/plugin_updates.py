@@ -15,14 +15,15 @@ import zipfile
 
 from manager import atomic_json, https_context
 
-REPO = 'dawoodtogoo2020-code/HelixSR-Decky'
+REPO = 'supercleans/Upscaler-Decky'
 PAGE = f'https://github.com/{REPO}/releases'
 API = f'https://api.github.com/repos/{REPO}/releases?per_page=30'
 INTERVAL = 24 * 60 * 60
 RETRY = 60 * 60
 MAX_ARCHIVE = 16 << 20
-PLUGIN_NAME = 'HelixSR Decky'
-FOLDER = 'HelixSR-Decky'
+PLUGIN_NAME = 'Upscaler Decky'
+FOLDER = 'Upscaler-Decky'
+PACKAGE_NAME = 'upscaler-decky'
 
 
 def semver(value):
@@ -107,7 +108,7 @@ def validate_zip(path, version):
         package = json.loads(archive.read(f'{FOLDER}/package.json'))
         if (not isinstance(manifest, dict) or manifest.get('name') != PLUGIN_NAME
                 or manifest.get('flags') != [] or manifest.get('api_version') != 1
-                or not isinstance(package, dict) or package.get('name') != 'helixsr-decky'
+                or not isinstance(package, dict) or package.get('name') != PACKAGE_NAME
                 or package.get('version') != version):
             raise ValueError('Plugin ZIP identity, permissions or version mismatch')
         if archive.testzip() is not None:
@@ -165,7 +166,7 @@ class PluginUpdates:
             self.attempted_at = now
             try:
                 request = urllib.request.Request(API, headers={'Accept': 'application/vnd.github+json',
-                    'User-Agent': f'HelixSR-Decky/{self.current}', 'X-GitHub-Api-Version': '2022-11-28'})
+                    'User-Agent': f'{FOLDER}/{self.current}', 'X-GitHub-Api-Version': '2022-11-28'})
                 with urllib.request.urlopen(request, timeout=20, context=https_context()) as response:
                     if response.geturl() != API:
                         raise ValueError('Unexpected plugin metadata redirect')
@@ -229,7 +230,7 @@ class PluginUpdates:
                 cached.unlink()
             temporary = destination.with_suffix('.download-' + uuid.uuid4().hex)
             try:
-                request = urllib.request.Request(release['url'], headers={'User-Agent': f'HelixSR-Decky/{self.current}'})
+                request = urllib.request.Request(release['url'], headers={'User-Agent': f'{FOLDER}/{self.current}'})
                 digest, count = hashlib.sha256(), 0
                 with urllib.request.urlopen(request, timeout=30, context=https_context()) as response:
                     parsed = urlsplit(response.geturl())
@@ -282,7 +283,7 @@ class PluginUpdates:
         if not self.stage.is_dir() or self.stage.is_symlink():
             return
         for path in self.stage.iterdir():
-            match = re.fullmatch(r'HelixSR-Decky-(\d+\.\d+\.\d+)-([0-9a-f]{64})(?:-[0-9a-f]{32})?\.zip', path.name)
+            match = re.fullmatch(rf'{re.escape(FOLDER)}-(\d+\.\d+\.\d+)-([0-9a-f]{{64}})(?:-[0-9a-f]{{32}})?\.zip', path.name)
             if not match or path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_ARCHIVE:
                 continue
             version, digest = match.groups()

@@ -9,9 +9,20 @@ import urllib.request
 REPO = 'lonewolf0622/HelixSR'
 ROOT = f'https://github.com/{REPO}'
 LATEST = ROOT + '/releases/latest'
+FSR4_REPO = 'zgauthier2000/fsr4-shader-performance-overrides'
+FSR4_ROOT = f'https://github.com/{FSR4_REPO}'
+FSR4_RELEASES = FSR4_ROOT + '/releases'
+FSR4_ASSET_NAME = 'fsr4.1.1-igpu-cyboman.zip'
+FSR4_VERSION = '4.1.1'
+OPTISCALER_NIGHTLY_REPO = 'optiscaler/OptiScaler-nightly'
+OPTISCALER_NIGHTLY_ROOT = f'https://github.com/{OPTISCALER_NIGHTLY_REPO}'
+OPTISCALER_NIGHTLY_RELEASES = OPTISCALER_NIGHTLY_ROOT + '/releases'
 MAX_HTML_BYTES = 2 << 20
 MAX_RELEASE_BYTES = 512 << 20
 VERSION = re.compile(r'v?(\d+)\.(\d+)\.(\d+)\Z')
+FSR4_TAG = re.compile(r'dll-(\d{4}-\d{2}-\d{2}(?:\.\d+)?)\Z')
+OPTISCALER_NIGHTLY_TAG = re.compile(r'nightly-(\d{8})(?:-[A-Za-z0-9._-]+)?\Z')
+OPTISCALER_NIGHTLY_ASSET = re.compile(r'OptiScaler_v([0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9._-]+)?)_(\d{8})\.7z\Z')
 DIGEST = re.compile(r'sha256:([a-fA-F0-9]{64})\Z')
 
 
@@ -29,6 +40,22 @@ def _tag_page(url):
     return (parts.hostname == 'github.com' and not parts.query
             and parts.path.startswith(prefix)
             and bool(VERSION.fullmatch(parts.path[len(prefix):])))
+
+
+def _fsr4_tag_page(url):
+    parts = _parts(url)
+    prefix = f'/{FSR4_REPO}/releases/tag/'
+    return (parts.hostname == 'github.com' and not parts.query
+            and parts.path.startswith(prefix)
+            and bool(FSR4_TAG.fullmatch(parts.path[len(prefix):])))
+
+
+def _optiscaler_nightly_tag_page(url):
+    parts = _parts(url)
+    prefix = f'/{OPTISCALER_NIGHTLY_REPO}/releases/tag/'
+    return (parts.hostname == 'github.com' and not parts.query
+            and parts.path.startswith(prefix)
+            and bool(OPTISCALER_NIGHTLY_TAG.fullmatch(parts.path[len(prefix):])))
 
 
 def _expanded(url, expected):
@@ -147,3 +174,94 @@ def web_latest_release(context=None):
         if not 0 < size <= MAX_RELEASE_BYTES:
             raise ValueError('Official asset size is outside the allowed range')
     return dict(version=version, url=asset, sha256=digest, size=size, page=page)
+
+
+def web_latest_fsr4_release(context=None):
+    """Read the latest dll-* FSR 4 tag, exact asset digest, and exact HEAD byte size."""
+    context = context if context is not None else ssl.create_default_context()
+    with _open(FSR4_RELEASES, method='GET', context=context,
+               allowed=lambda url: url == FSR4_RELEASES) as response:
+        raw_index = response.read(MAX_HTML_BYTES + 1)
+        if len(raw_index) > MAX_HTML_BYTES:
+            raise ValueError('Upstream FSR 4 releases page is too large')
+    match = re.search(rf'/{re.escape(FSR4_REPO)}/releases/tag/(dll-\d{{4}}-\d{{2}}-\d{{2}}(?:\.\d+)?)',
+                      raw_index.decode('utf-8', errors='replace'))
+    if not match:
+        raise ValueError('Latest FSR 4 dll release tag was not found')
+    tag = match.group(1)
+    page = f'{FSR4_ROOT}/releases/tag/{tag}'
+    if not _fsr4_tag_page(page):
+        raise ValueError('Latest FSR 4 release did not resolve to a valid dll tag')
+    asset_href = f'/{FSR4_REPO}/releases/download/{tag}/{FSR4_ASSET_NAME}'
+    asset = 'https://github.com' + asset_href
+    expanded_path = f'/{FSR4_REPO}/releases/expanded_assets/{tag}'
+    expanded = 'https://github.com' + expanded_path
+    with _open(expanded, method='GET', context=context,
+               allowed=lambda url: _expanded(url, expanded_path)) as response:
+        raw = response.read(MAX_HTML_BYTES + 1)
+        if len(raw) > MAX_HTML_BYTES:
+            raise ValueError('Upstream FSR 4 release assets page is too large')
+    parser = _AssetRows(asset_href)
+    parser.feed(raw.decode('utf-8'))
+    parser.close()
+    digest = parser.digest()
+    with _open(asset, method='HEAD', context=context,
+               allowed=lambda url: _asset_target(url, asset)) as response:
+        raw_size = response.headers.get('Content-Length')
+        if not isinstance(raw_size, str) or not re.fullmatch(r'[0-9]+', raw_size):
+            raise ValueError('Official FSR 4 asset lacks exact Content-Length')
+        size = int(raw_size)
+        if not 0 < size <= MAX_RELEASE_BYTES:
+            raise ValueError('Official FSR 4 asset size is outside the allowed range')
+    return dict(version=FSR4_VERSION, tag=tag, url=asset, sha256=digest, size=size, page=page)
+
+
+def web_latest_optiscaler_nightly_release(context=None):
+    """Read the latest nightly-* OptiScaler tag, exact .7z asset digest, and exact HEAD byte size."""
+    context = context if context is not None else ssl.create_default_context()
+    with _open(OPTISCALER_NIGHTLY_RELEASES, method='GET', context=context,
+               allowed=lambda url: url == OPTISCALER_NIGHTLY_RELEASES) as response:
+        raw_index = response.read(MAX_HTML_BYTES + 1)
+        if len(raw_index) > MAX_HTML_BYTES:
+            raise ValueError('Upstream OptiScaler Nightly releases page is too large')
+    match = re.search(rf'/{re.escape(OPTISCALER_NIGHTLY_REPO)}/releases/tag/(nightly-\d{{8}}(?:-[A-Za-z0-9._-]+)?)',
+                      raw_index.decode('utf-8', errors='replace'))
+    if not match:
+        raise ValueError('Latest OptiScaler Nightly release tag was not found')
+    tag = match.group(1)
+    page = f'{OPTISCALER_NIGHTLY_ROOT}/releases/tag/{tag}'
+    if not _optiscaler_nightly_tag_page(page):
+        raise ValueError('Latest OptiScaler Nightly release did not resolve to a valid nightly tag')
+    expanded_path = f'/{OPTISCALER_NIGHTLY_REPO}/releases/expanded_assets/{tag}'
+    expanded = 'https://github.com' + expanded_path
+    with _open(expanded, method='GET', context=context,
+               allowed=lambda url: _expanded(url, expanded_path)) as response:
+        raw = response.read(MAX_HTML_BYTES + 1)
+        if len(raw) > MAX_HTML_BYTES:
+            raise ValueError('Upstream OptiScaler Nightly release assets page is too large')
+    expanded_html = raw.decode('utf-8', errors='replace')
+    asset_match = re.search(
+        rf'/{re.escape(OPTISCALER_NIGHTLY_REPO)}/releases/download/{re.escape(tag)}/'
+        r'(OptiScaler_v([0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9._-]+)?)_(\d{8})\.7z)',
+        expanded_html)
+    if not asset_match:
+        raise ValueError('Official OptiScaler Nightly .7z asset was not found')
+    asset_name = asset_match.group(1)
+    nightly_version = f'{asset_match.group(2)}+{asset_match.group(3)}'
+    asset_href = f'/{OPTISCALER_NIGHTLY_REPO}/releases/download/{tag}/{asset_name}'
+    asset = 'https://github.com' + asset_href
+    parser = _AssetRows(asset_href)
+    parser.feed(expanded_html)
+    parser.close()
+    digest = parser.digest()
+    with _open(asset, method='HEAD', context=context,
+               allowed=lambda url: _asset_target(url, asset)) as response:
+        raw_size = response.headers.get('Content-Length')
+        if not isinstance(raw_size, str) or not re.fullmatch(r'[0-9]+', raw_size):
+            raise ValueError('Official OptiScaler Nightly asset lacks exact Content-Length')
+        size = int(raw_size)
+        if not 0 < size <= MAX_RELEASE_BYTES:
+            raise ValueError('Official OptiScaler Nightly asset size is outside the allowed range')
+    return dict(version=nightly_version, tag=tag, asset_name=asset_name,
+                url=asset, sha256=digest, size=size, page=page)
+

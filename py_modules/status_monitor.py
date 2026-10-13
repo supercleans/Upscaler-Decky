@@ -98,7 +98,7 @@ class StatusMonitor:
         value.pop('_sampled', None)
         return value
 
-    def configure(self, gid, enabled, executable=None):
+    def configure(self, gid, enabled, executable=None, route=None):
         if type(enabled) is not bool:
             raise ValueError('Overlay setting requires a boolean')
         with self.control:
@@ -109,7 +109,10 @@ class StatusMonitor:
                 return self.status()
             if not isinstance(gid, str) or not gid:
                 raise ValueError('Select a game before enabling its status overlay')
-            game = self.manager.assess_safe(self.manager.get_game(gid), executable=executable)
+            kwargs = {'executable': executable}
+            if route is not None:
+                kwargs['route'] = route
+            game = self.manager.assess_safe(self.manager.get_game(gid), **kwargs)
             evidence = RuntimeEvidence(game)
             record = self.manager.record_path(game)
             stamp = record_stamp(record)

@@ -29,12 +29,22 @@ from operation_lock import operation_lock, game_locked
 from host_environment import host_environment
 from installation_status import installation_status
 from build_runtime import wine_candidates
-from github_release import web_latest_release
-from model_variants import (DEFAULT_VARIANT, catalog, package_selection, same_release,
-                            select_variant, valid_variant, variant_label, verify_recipe, verify_outputs)
+from github_release import (FSR4_ASSET_NAME, FSR4_REPO, FSR4_TAG, FSR4_VERSION,
+                            OPTISCALER_NIGHTLY_ASSET, OPTISCALER_NIGHTLY_REPO,
+                            OPTISCALER_NIGHTLY_TAG, web_latest_fsr4_release,
+                            web_latest_optiscaler_nightly_release, web_latest_release)
+from model_variants import (DEFAULT_OPTISCALER_CHANNEL, DEFAULT_VARIANT, FSR4_ADAPTER, MY_FSR_DLL,
+                            OPTISCALER_NIGHTLY_CHANNEL, catalog, is_fsr4_variant,
+                            optiscaler_catalog, optiscaler_channel_of, optiscaler_label,
+                            package_selection, same_release, select_optiscaler_channel,
+                            select_variant, valid_optiscaler_build, valid_variant,
+                            variant_label, verify_fsr4_archive, verify_fsr4_outputs,
+                            verify_optiscaler_nightly_archive, verify_outputs, verify_recipe)
 
 REPO = 'lonewolf0622/HelixSR'
 API = f'https://api.github.com/repos/{REPO}/releases/latest'
+FSR4_API = f'https://api.github.com/repos/{FSR4_REPO}/releases?per_page=15'
+OPTISCALER_NIGHTLY_API = f'https://api.github.com/repos/{OPTISCALER_NIGHTLY_REPO}/releases?per_page=10'
 DLL = 'amd_fidelityfx_dx12.dll'
 NETWORK = ('helixsr_weights.bin', 'helixsr_kernels.pak')
 AMD_FG = 'amd_fidelityfx_framegeneration_dx12.dll'
@@ -83,6 +93,22 @@ def load_release(settings):
         return {}
 
 
+def load_fsr4_release(settings):
+    try:
+        value = load_json(Path(settings) / 'fsr4_release.json')
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def load_optiscaler_nightly_release(settings):
+    try:
+        value = load_json(Path(settings) / 'optiscaler_nightly_release.json')
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
 def validate_release(release):
     if not isinstance(release, dict):
         raise ValueError('Invalid upstream release metadata')
@@ -97,12 +123,52 @@ def validate_release(release):
     return release
 
 
+def validate_fsr4_release(release):
+    if not isinstance(release, dict):
+        raise ValueError('Invalid upstream FSR 4 release metadata')
+    tag = release.get('tag', '')
+    ver = release.get('version', '')
+    if not isinstance(tag, str) or not FSR4_TAG.fullmatch(tag) or not isinstance(ver, str):
+        raise ValueError('Invalid upstream FSR 4 release tag or version')
+    version(ver)
+    digest, size = release.get('sha256'), release.get('size')
+    if (not isinstance(digest, str) or not re.fullmatch(r'[a-f0-9]{64}', digest)
+            or type(size) is not int or not 0 < size <= 512 << 20
+            or release.get('url') != f'https://github.com/{FSR4_REPO}/releases/download/{tag}/{FSR4_ASSET_NAME}'
+            or release.get('page') != f'https://github.com/{FSR4_REPO}/releases/tag/{tag}'):
+        raise ValueError('Invalid official FSR 4 release URL, size or SHA256 digest')
+    return release
+
+
+def validate_optiscaler_nightly_release(release):
+    if not isinstance(release, dict):
+        raise ValueError('Invalid upstream OptiScaler Nightly release metadata')
+    tag = release.get('tag', '')
+    ver = release.get('version', '')
+    asset_name = release.get('asset_name', '')
+    if (not isinstance(tag, str) or not OPTISCALER_NIGHTLY_TAG.fullmatch(tag)
+            or not isinstance(ver, str) or not ver
+            or not isinstance(asset_name, str) or not OPTISCALER_NIGHTLY_ASSET.fullmatch(asset_name)):
+        raise ValueError('Invalid upstream OptiScaler Nightly tag, version or asset name')
+    asset_match = OPTISCALER_NIGHTLY_ASSET.fullmatch(asset_name)
+    if ver != f'{asset_match.group(1)}+{asset_match.group(2)}':
+        raise ValueError('OptiScaler Nightly version does not match its asset filename')
+    digest, size = release.get('sha256'), release.get('size')
+    if (not isinstance(digest, str) or not re.fullmatch(r'[a-f0-9]{64}', digest)
+            or type(size) is not int or not 0 < size <= 512 << 20
+            or release.get('url') != f'https://github.com/{OPTISCALER_NIGHTLY_REPO}/releases/download/{tag}/{asset_name}'
+            or release.get('page') != f'https://github.com/{OPTISCALER_NIGHTLY_REPO}/releases/tag/{tag}'):
+        raise ValueError('Invalid official OptiScaler Nightly release URL, size or SHA256 digest')
+    return release
+
+
 def license_key(release, variant_id=None):
     if not isinstance(release, dict) or not release.get('version') or not release.get('sha256'):
         return None
     selected = select_variant(variant_id)
     return {'terms': LICENSE_REV, 'version': release['version'], 'release_sha256': release['sha256'],
             'variant_id': selected['id'], 'adapter': selected['adapter']}
+
 
 
 def sha(path):
@@ -401,6 +467,71 @@ def safe_extract(archive, destination):
                 target.chmod(0o755 if mode & 0o111 else 0o644)
 
 
+def safe_extract_7z(archive, destination):
+    archive, destination = Path(archive), Path(destination)
+    if zipfile.is_zipfile(archive):
+        safe_extract(archive, destination)
+        return
+    with archive.open('rb') as f:
+        magic = f.read(6)
+    if magic != b"7z\xbc\xaf'\x1c":
+        raise ValueError('Archive is not a valid 7z archive')
+    destination.mkdir(parents=True, exist_ok=True)
+    tar_bin = shutil.which('bsdtar') or shutil.which('tar')
+    seven_bin = shutil.which('7zz') or shutil.which('7z') or shutil.which('7za')
+    if tar_bin:
+        listing = subprocess.run([tar_bin, '-tf', str(archive)],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True, encoding='utf-8',
+                                 errors='replace', timeout=30)
+        if listing.returncode != 0:
+            if not seven_bin:
+                raise ValueError('Failed to inspect 7z archive: ' + listing.stderr.strip()[:200])
+            tar_bin = None
+        else:
+            members = [line.strip('\r\n') for line in listing.stdout.splitlines() if line.strip()]
+            if len(members) > 30000:
+                raise ValueError('Archive member limit')
+            for raw_name in members:
+                name = raw_name.replace('\\', '/')
+                p = PurePosixPath(name)
+                if p.is_absolute() or '..' in p.parts or ':' in name or not p.parts:
+                    raise ValueError('Unsafe release archive path: ' + raw_name[:120])
+            extract = subprocess.run([tar_bin, '-xf', str(archive), '-C', str(destination)],
+                                     stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True, encoding='utf-8',
+                                     errors='replace', timeout=120)
+            if extract.returncode != 0:
+                raise ValueError('Failed to extract 7z archive: ' + extract.stderr.strip()[:200])
+    if not tar_bin:
+        if not seven_bin:
+            raise ValueError('Neither bsdtar/tar nor 7z is installed to extract .7z archives')
+        extract = subprocess.run([seven_bin, 'x', '-y', f'-o{destination}', str(archive)],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE, text=True, encoding='utf-8',
+                                 errors='replace', timeout=120)
+        if extract.returncode != 0:
+            raise ValueError('Failed to extract 7z archive: ' + extract.stderr.strip()[:200])
+    total, count = 0, 0
+    for root_dir, dirs, files in os.walk(destination, followlinks=False):
+        root_path = Path(root_dir)
+        for d in dirs:
+            dp = root_path / d
+            if dp.is_symlink():
+                raise ValueError('Unsafe symlink in extracted archive')
+        for fn in files:
+            count += 1
+            if count > 30000:
+                raise ValueError('Archive member limit')
+            fp = root_path / fn
+            if fp.is_symlink() or not fp.is_file():
+                raise ValueError('Unsafe entry in extracted archive')
+            total += fp.stat().st_size
+            if total > 2 << 30:
+                raise ValueError('Oversized extracted release archive')
+            fp.chmod(0o755 if fp.suffix.lower() == '.sh' else 0o644)
+
+
 class Manager:
     def __init__(self, home, settings):
         self.home, self.settings = Path(home), Path(settings)
@@ -511,6 +642,8 @@ class Manager:
             return None
         if 'variant' in record and not valid_variant(record['variant']):
             return None
+        if 'optiscaler_build' in record and not valid_optiscaler_build(record['optiscaler_build']):
+            return None
         if 'variant' in record and (not isinstance(record.get('files'), dict)
                                     or 'helixsr_setup.json' not in record['files']):
             return None
@@ -532,6 +665,7 @@ class Manager:
         except ValueError:
             return None
         path = Path(path)
+        is_fsr4 = valid_variant(record.get('variant')) and is_fsr4_variant(record['variant']['id'])
         try:
             if (not path.is_dir() or self._symlink_in_path(path)
                     or path.stat().st_dev != Path(game['folder']).stat().st_dev):
@@ -541,7 +675,9 @@ class Manager:
                 if self._symlink_in_path(package_root):
                     return None
                 resolved, resolved_root = path.resolve(), package_root.resolve()
-                if resolved.parent != resolved_root or not set(PACKAGE_FILES).issubset(files):
+                if resolved.parent != resolved_root or (
+                        not set(PACKAGE_FILES).issubset(files)
+                        and not (is_fsr4 and {MY_FSR_DLL, 'helixsr_setup.json'}.issubset(files))):
                     return None
             for name, digest in files.items():
                 if (not isinstance(name, str) or not name or '\x00' in name or '\\' in name or ':' in name
@@ -559,6 +695,9 @@ class Manager:
             framegen = path / 'amd-fsr' / AMD_FG
             if framegen.is_symlink() or (framegen.is_file() and 'amd-fsr/' + AMD_FG not in files):
                 return None
+            my_fsr = path / MY_FSR_DLL
+            if my_fsr.is_symlink() or (my_fsr.is_file() and MY_FSR_DLL not in files):
+                return None
         except OSError:
             return None
         return parsed_version, path, record
@@ -568,9 +707,16 @@ class Manager:
         if route not in (None, 'direct', 'optiscaler'):
             raise ValueError('Unknown package route')
         path, record = package[1], package[2]
-        required = set(PACKAGE_FILES if route in (None, 'optiscaler') else NETWORK + (DLL,))
-        if record.get('variant'):
-            required.add('helixsr_setup.json')
+        if 'optiscaler_build' in record and not valid_optiscaler_build(record['optiscaler_build']):
+            return False
+        is_fsr4 = valid_variant(record.get('variant')) and is_fsr4_variant(record['variant']['id'])
+        if is_fsr4:
+            required = ({MY_FSR_DLL, 'helixsr_setup.json'} if route == 'direct'
+                        else set(PACKAGE_FILES) | {MY_FSR_DLL, 'helixsr_setup.json'})
+        else:
+            required = set(PACKAGE_FILES if route in (None, 'optiscaler') else NETWORK + (DLL,))
+            if record.get('variant'):
+                required.add('helixsr_setup.json')
         if not required.issubset(record['files']):
             return False
         framegen_name = 'amd-fsr/' + AMD_FG
@@ -581,17 +727,31 @@ class Manager:
             verified = all(not self._symlink_in_path(path / name)
                        and (path / name).is_file() and sha(path / name) == record['files'][name]
                        for name in record['files'])
+            if verified and record.get('optiscaler_build', {}).get('channel') == OPTISCALER_NIGHTLY_CHANNEL:
+                opti_meta = record['optiscaler_build']
+                verified = (record['files'].get('optiscaler/OptiScaler.dll') == opti_meta['dll_sha256']
+                            and record['files'].get('optiscaler/OptiScaler.ini') == opti_meta['ini_sha256'])
             if verified and record.get('variant'):
-                verify_outputs(path)
-                api = pe_info(path / DLL)
-                verified = api['arch'] == 'x64' and bool(api['ffx'])
+                if is_fsr4:
+                    verify_fsr4_outputs(path)
+                    api = pe_info(path / MY_FSR_DLL)
+                    verified = api['arch'] == 'x64' and bool(api['ffx'])
+                    if route in (None, 'optiscaler'):
+                        base_api = pe_info(path / DLL)
+                        verified = verified and base_api['arch'] == 'x64' and bool(base_api['ffx'])
+                else:
+                    verify_outputs(path)
+                    api = pe_info(path / DLL)
+                    verified = api['arch'] == 'x64' and bool(api['ffx'])
             return verified
         except (OSError, ValueError, KeyError, TypeError, struct.error):
             return False
 
-    def package(self, game, route=None, release=None, variant_id=None, selection=None, installed=None):
+    def package(self, game, route=None, release=None, variant_id=None, selection=None,
+                installed=None, optiscaler_channel=None, optiscaler_release=None):
         # Packages remain on the same filesystem as the selected game.
         selected = select_variant(variant_id)
+        target_opti = select_optiscaler_channel(optiscaler_channel)['id'] if optiscaler_channel is not None else None
         choices = []
         for namespace in ('packages', 'variant_packages_v1'):
             records = self.cfg.get(namespace, {})
@@ -648,6 +808,15 @@ class Manager:
                        and self.matches_installed_payload(game, installed, choice[2])]
             if len({package_selection(choice[2]) for choice in choices}) != 1:
                 return None
+        elif target_opti is not None:
+            choices = [choice for choice in choices
+                       if optiscaler_channel_of(choice[2]) == target_opti]
+            if target_opti == OPTISCALER_NIGHTLY_CHANNEL and optiscaler_release is not None:
+                choices = [choice for choice in choices
+                           if choice[2].get('optiscaler_build', {}).get('release_sha256') == optiscaler_release.get('sha256')]
+        else:
+            choices = [choice for choice in choices
+                       if optiscaler_channel_of(choice[2]) == DEFAULT_OPTISCALER_CHANNEL]
         if not choices:
             return None
         choices.sort(key=lambda x: (x[0], x[2].get('prepared_at', 0), x[3]), reverse=True)
@@ -671,10 +840,18 @@ class Manager:
         try:
             root = Path(game['folder'])
             pairs = []
+            is_fsr4 = (valid_variant(package_record.get('variant'))
+                       and is_fsr4_variant(package_record['variant']['id']))
             if installed['route'] == 'direct':
                 for target in map(Path, installed['targets']):
-                    pairs.append((str(target.relative_to(root)), DLL))
-                    pairs.extend((str((target.parent / name).relative_to(root)), name) for name in NETWORK)
+                    if is_fsr4:
+                        pairs.append((str(target.relative_to(root)), MY_FSR_DLL))
+                        if any(installed['current'].get(str((target.parent / name).relative_to(root))) is not None
+                               for name in NETWORK):
+                            return False
+                    else:
+                        pairs.append((str(target.relative_to(root)), DLL))
+                        pairs.extend((str((target.parent / name).relative_to(root)), name) for name in NETWORK)
             elif installed['route'] == 'optiscaler':
                 game_target = Path(installed['target'])
                 target = game_target / 'HelixSR'
@@ -691,6 +868,12 @@ class Manager:
                     return False
                 if fg_hash:
                     pairs.append((fg_rel, 'amd-fsr/' + AMD_FG))
+                my_fsr_rel = str((target / MY_FSR_DLL).relative_to(root))
+                my_fsr_hash = package_record['files'].get(MY_FSR_DLL) if is_fsr4 else None
+                if installed['current'].get(my_fsr_rel) != my_fsr_hash:
+                    return False
+                if my_fsr_hash:
+                    pairs.append((my_fsr_rel, MY_FSR_DLL))
             return bool(pairs) and all(installed['current'].get(rel) == package_record['files'][name]
                                        for rel, name in pairs)
         except (ValueError, TypeError, KeyError):
@@ -705,6 +888,8 @@ class Manager:
         release = load_release(self.settings)
         return dict(games=games, warnings=warnings, release=release,
                     model_catalog=catalog(),
+                    optiscaler_catalog=optiscaler_catalog(),
+                    optiscaler_nightly_release=load_optiscaler_nightly_release(self.settings),
                     license_accepted=bool(self.cfg.get('license')) and self.cfg.get('license') == license_key(release),
                     jobs=list(self.jobs.values()))
 
@@ -730,9 +915,9 @@ class Manager:
         except (OSError, ValueError):
             return False
 
-    def assess_safe(self, game, detailed=True, executable=None):
+    def assess_safe(self, game, detailed=True, executable=None, route=None):
         try:
-            return self.assess(game, detailed=detailed, executable=executable)
+            return self.assess(game, detailed=detailed, executable=executable, route=route)
         except (OSError, ValueError, TypeError, AttributeError, KeyError) as e:
             # A malformed receipt or other per-game metadata must block this
             # entry, not discard the entire library. Actions still reassess.
@@ -740,7 +925,9 @@ class Manager:
             if isinstance(e, (TypeError, AttributeError, KeyError)):
                 reason = 'Game metadata has an unexpected format; review diagnostics before changing files: ' + type(e).__name__ + ': ' + reason
             data = dict(game, compatibility='blocked', reasons=[reason], route=None,
+                        available_routes=[],
                         managed=False, enabled=False, inputs=[],
+                        installed_optiscaler=None, installed_optiscaler_channel=None,
                         executable_choices=[], selected_executable=None, executable_selection_needed=False,
                         recovery_available=self.recovery_available(game),
                         optiscaler={'present': False, 'involved': False, 'helix_configured': False,
@@ -758,7 +945,7 @@ class Manager:
             raise ValueError('Game disappeared. Refresh library.')
         return self.entries[gid]
 
-    def assess(self, game, detailed=True, executable=None):
+    def assess(self, game, detailed=True, executable=None, route=None):
         root = safe_root(game['folder'])
         tree = scan_tree(root)
         names = [(d / n, n.lower()) for d, ns in tree for n in ns]
@@ -786,8 +973,26 @@ class Manager:
         probe_targets = [p for p in targets if p.is_file()] if rec.get('route') == 'direct' else targets
         direct_legacy = any(pe_info(p)['helix'] for p in probe_targets)
         native_api = bool(probe_targets) and all(pe_info(p)['ffx'] for p in probe_targets)
-        route = rec.get('route') or ('direct' if native_api else 'optiscaler' if inputs and main else
-                                    'direct' if targets else None)
+        available_routes = []
+        if rec.get('route'):
+            available_routes = [rec['route']]
+        else:
+            if native_api or (targets and not (inputs and main)):
+                available_routes.append('direct')
+            if inputs and main:
+                available_routes.append('optiscaler')
+        requested_route = route
+        default_route = rec.get('route') or ('direct' if native_api else 'optiscaler' if inputs and main else
+                                             'direct' if targets else None)
+        if requested_route is not None:
+            if rec:
+                if requested_route != rec.get('route'):
+                    raise ValueError('Route selection is only available for unmanaged games; remove the current installation to switch routes')
+            elif requested_route not in ('direct', 'optiscaler') or requested_route not in available_routes:
+                raise ValueError('Selected installation route is not available for this game')
+            route = requested_route
+        else:
+            route = default_route
         # Native API discovery uses the original heuristic independently of an
         # OptiScaler executable choice. An existing receipt owns its target.
         eligible = []
@@ -920,9 +1125,13 @@ class Manager:
         # A library row needs compatibility and recorded installation state,
         # not a cross-library search and rehash of every prepared model. Details
         # and every mutation retain the full, fresh package verification.
-        package = self.package(game, route) if detailed else None
+        package = self.package(
+            game, route,
+            optiscaler_channel=optiscaler_channel_of(rec) if rec and route == 'optiscaler' else None,
+        ) if detailed else None
         data = dict(game, compatibility='blocked' if blocked else 'unsupported' if dx11_title else 'candidate' if route else 'unsupported',
-                    reasons=blocked + reasons, route=route, inputs=inputs, target=str(target) if target else None,
+                    reasons=blocked + reasons, route=route, available_routes=[] if dx11_title else available_routes,
+                    inputs=inputs, target=str(target) if target else None,
                     targets=[str(p) for p in targets], main_exe=str(main) if main else None,
                     renderer_unsupported=bool(dx11_title), executable_choices=[] if dx11_title else eligible,
                     executable_selection_needed=bool(not dx11_title and eligible and not rec and blocked == [
@@ -934,6 +1143,8 @@ class Manager:
                     legacy=legacy, package_version=package[2]['version'] if package else None,
                     installed_model=variant_label(rec.get('variant')) if rec or legacy else None,
                     installed_variant=rec.get('variant', {}).get('id') if valid_variant(rec.get('variant')) else None,
+                    installed_optiscaler=optiscaler_label(rec.get('optiscaler_build')) if rec and rec.get('route') == 'optiscaler' else None,
+                    installed_optiscaler_channel=optiscaler_channel_of(rec) if rec and rec.get('route') == 'optiscaler' else None,
                     recovery_available=self.recovery_available(game), steam_build_review=steam_build_review,
                     dx12_confirmation_needed=not dx11_title and route == 'optiscaler' and not (main and pe_info(main)['dx12']),
                     **aware)
@@ -970,18 +1181,32 @@ class Manager:
         self.save()
         return self.refresh()
 
+    def load_variant_release(self, variant_id=None):
+        selected = select_variant(variant_id)
+        if is_fsr4_variant(selected['id']):
+            return load_fsr4_release(self.settings)
+        return load_release(self.settings)
+
+    def check_variant_update(self, variant_id=None, force=False):
+        selected = select_variant(variant_id)
+        if is_fsr4_variant(selected['id']):
+            return self.check_fsr4_update(force=force)
+        return self.check_update(force=force)
+
     def accept_license(self, accepted, token=None):
-        release = self.check_update() if accepted else {}
-        if accepted and release.get('error'):
-            raise ValueError(release['error'])
         selected = None
+        reviewed = None
         if accepted and token:
             reviewed = self.previews.get(token)
             if not reviewed or reviewed.get('action') != 'latest' or time.time() > reviewed['expires']:
                 raise ValueError('Installation review expired; review the change again')
+            selected = reviewed['variant_id']
+        release = self.check_variant_update(selected) if accepted else {}
+        if accepted and release.get('error'):
+            raise ValueError(release['error'])
+        if accepted and reviewed is not None:
             if not same_release(release, reviewed['release']):
                 raise ValueError('Upstream release changed since review; review Install or Update again')
-            selected = reviewed['variant_id']
         key = license_key(release, selected) if accepted else None
         if accepted and not key:
             raise ValueError('Check upstream release metadata before accepting preparation terms')
@@ -1107,35 +1332,316 @@ class Manager:
             atomic_json(self.settings / 'release.json', failed)
             return failed
 
-    def preview_latest(self, gid, dx12_confirmed=False, variant_id=None, executable=None):
+    def check_fsr4_update(self, force=False):
+        old = load_fsr4_release(self.settings)
+        now = time.time()
+        valid_cache = False
+        try:
+            validate_fsr4_release(old)
+            valid_cache = old.get('metadata_policy') == RELEASE_POLICY
+        except (ValueError, TypeError):
+            pass
+        if (not force and valid_cache and not old.get('error')
+                and isinstance(old.get('checked_at'), (int, float))
+                and 0 <= now - old['checked_at'] < 6 * 3600):
+            return old
+        pause = old.get('api_retry_at')
+        paused = (type(pause) in (int, float) and math.isfinite(pause)
+                  and now < pause <= now + 86400
+                  and old.get('api_limit_kind') in ('primary', 'secondary', 'blocked'))
+        if paused:
+            if old['api_limit_kind'] == 'primary':
+                web_retry = old.get('web_retry_at')
+                if (type(web_retry) in (int, float) and math.isfinite(web_retry)
+                        and now < web_retry <= now + 86400):
+                    return old
+                if (valid_cache and not old.get('error')
+                        and type(old.get('checked_at')) in (int, float)
+                        and 0 <= now - old['checked_at'] < 30):
+                    return old
+                return self._web_fsr4_update(old, valid_cache, pause)
+            return old
+        headers = {'User-Agent': 'HelixSR-Decky/0.1', 'Accept': 'application/vnd.github+json'}
+        if valid_cache and isinstance(old.get('etag'), str):
+            headers['If-None-Match'] = old['etag']
+        try:
+            with urllib.request.urlopen(urllib.request.Request(FSR4_API, headers=headers), timeout=20, context=https_context()) as response:
+                if response.geturl() != FSR4_API:
+                    raise ValueError('Unexpected upstream metadata redirect')
+                raw = response.read((2 << 20) + 1)
+                if len(raw) > 2 << 20:
+                    raise ValueError('Upstream metadata is too large')
+                data = json.loads(raw)
+                if isinstance(data, list):
+                    data = next((r for r in data if isinstance(r, dict) and not r.get('draft')
+                                 and not r.get('prerelease') and isinstance(r.get('tag_name'), str)
+                                 and FSR4_TAG.fullmatch(r['tag_name'])), None)
+                if not isinstance(data, dict) or data.get('draft') or data.get('prerelease'):
+                    raise ValueError('Expected an official stable FSR 4 override release')
+                tag = data['tag_name']
+                if not isinstance(tag, str) or not FSR4_TAG.fullmatch(tag):
+                    raise ValueError('Invalid FSR 4 release tag')
+                if not isinstance(data.get('assets'), list):
+                    raise ValueError('Invalid upstream assets')
+                asset = next((x for x in data['assets'] if isinstance(x, dict)
+                              and x.get('name') == FSR4_ASSET_NAME), None)
+                if (not asset or not isinstance(asset.get('digest'), str)
+                        or not re.fullmatch(r'sha256:[a-fA-F0-9]{64}', asset['digest'])):
+                    raise ValueError('Official FSR 4 release lacks a usable SHA256 asset digest')
+                current = dict(version=FSR4_VERSION, tag=tag, url=asset['browser_download_url'],
+                               sha256=asset['digest'][7:].lower(), size=asset['size'],
+                               checked_at=time.time(), etag=response.headers.get('ETag'),
+                               page=data['html_url'], error=None, metadata_policy=RELEASE_POLICY,
+                               metadata_source='github-api',
+                               asset_id=asset.get('id'), asset_updated_at=asset.get('updated_at'))
+                validate_fsr4_release(current)
+                atomic_json(self.settings / 'fsr4_release.json', current)
+                return current
+        except urllib.error.HTTPError as e:
+            if e.code == 304 and valid_cache:
+                old['checked_at'], old['error'] = time.time(), None
+                old.pop('failed_at', None)
+                atomic_json(self.settings / 'fsr4_release.json', old)
+                return old
+            if e.code in (403, 429):
+                kind, retry_at = github_pause(e, now)
+                old.update(api_limit_kind=kind, api_retry_at=retry_at)
+                if kind == 'primary':
+                    return self._web_fsr4_update(old, valid_cache, retry_at)
+                old['error'] = (f'GitHub returned HTTP {e.code}; '
+                                + ('its request limit is active. ' if kind == 'secondary'
+                                   else 'access to its update API was denied. ')
+                                + 'Retry later; reconnecting may not help.')
+            else:
+                old['error'] = f'GitHub returned HTTP {e.code}; retry later to check the latest FSR 4 release'
+        except (OSError, ValueError, TypeError, KeyError, http.client.HTTPException) as e:
+            old['error'] = str(e)
+        if not valid_cache:
+            old = {key: old[key] for key in ('error', 'api_retry_at', 'api_limit_kind') if key in old}
+        old['failed_at'] = time.time()
+        atomic_json(self.settings / 'fsr4_release.json', old)
+        return old
+
+    def _web_fsr4_update(self, old, valid_cache, retry_at):
+        now = time.time()
+        web_retry = old.get('web_retry_at')
+        if (type(web_retry) in (int, float) and math.isfinite(web_retry)
+                and now < web_retry <= now + 86400):
+            old.update(api_limit_kind='primary', api_retry_at=retry_at)
+            atomic_json(self.settings / 'fsr4_release.json', old)
+            return old
+        try:
+            current = web_latest_fsr4_release(context=https_context())
+            validate_fsr4_release(current)
+            current.update(checked_at=time.time(), etag=None, error=None,
+                           metadata_policy=RELEASE_POLICY, metadata_source='github-web',
+                           api_limit_kind='primary', api_retry_at=retry_at)
+            atomic_json(self.settings / 'fsr4_release.json', current)
+            return current
+        except (OSError, ValueError, TypeError, KeyError, http.client.HTTPException) as error:
+            failed = dict(old) if valid_cache else {}
+            now = time.time()
+            web_retry = now + 30
+            if isinstance(error, urllib.error.HTTPError) and error.code in (403, 429):
+                _, web_retry = github_pause(error, now)
+            failed.update(error=f'GitHub API request limit reached; official FSR 4 release verification failed: {error}',
+                          failed_at=now, api_limit_kind='primary', api_retry_at=retry_at,
+                          web_retry_at=web_retry)
+            atomic_json(self.settings / 'fsr4_release.json', failed)
+            return failed
+
+    def check_optiscaler_nightly_update(self, force=False):
+        old = load_optiscaler_nightly_release(self.settings)
+        now = time.time()
+        valid_cache = False
+        try:
+            validate_optiscaler_nightly_release(old)
+            valid_cache = old.get('metadata_policy') == RELEASE_POLICY
+        except (ValueError, TypeError):
+            pass
+        if (not force and valid_cache and not old.get('error')
+                and isinstance(old.get('checked_at'), (int, float))
+                and 0 <= now - old['checked_at'] < 6 * 3600):
+            return old
+        pause = old.get('api_retry_at')
+        paused = (type(pause) in (int, float) and math.isfinite(pause)
+                  and now < pause <= now + 86400
+                  and old.get('api_limit_kind') in ('primary', 'secondary', 'blocked'))
+        if paused:
+            if old['api_limit_kind'] == 'primary':
+                web_retry = old.get('web_retry_at')
+                if (type(web_retry) in (int, float) and math.isfinite(web_retry)
+                        and now < web_retry <= now + 86400):
+                    return old
+                if (valid_cache and not old.get('error')
+                        and type(old.get('checked_at')) in (int, float)
+                        and 0 <= now - old['checked_at'] < 30):
+                    return old
+                return self._web_optiscaler_nightly_update(old, valid_cache, pause)
+            return old
+        headers = {'User-Agent': 'HelixSR-Decky/0.1', 'Accept': 'application/vnd.github+json'}
+        if valid_cache and isinstance(old.get('etag'), str):
+            headers['If-None-Match'] = old['etag']
+        try:
+            with urllib.request.urlopen(urllib.request.Request(OPTISCALER_NIGHTLY_API, headers=headers), timeout=20, context=https_context()) as response:
+                if response.geturl() != OPTISCALER_NIGHTLY_API:
+                    raise ValueError('Unexpected upstream metadata redirect')
+                raw = response.read((2 << 20) + 1)
+                if len(raw) > 2 << 20:
+                    raise ValueError('Upstream metadata is too large')
+                data = json.loads(raw)
+                if isinstance(data, list):
+                    data = next((r for r in data if isinstance(r, dict) and not r.get('draft')
+                                 and isinstance(r.get('tag_name'), str)
+                                 and OPTISCALER_NIGHTLY_TAG.fullmatch(r['tag_name'])), None)
+                if not isinstance(data, dict) or data.get('draft'):
+                    raise ValueError('Expected an official OptiScaler Nightly release')
+                tag = data['tag_name']
+                if not isinstance(tag, str) or not OPTISCALER_NIGHTLY_TAG.fullmatch(tag):
+                    raise ValueError('Invalid OptiScaler Nightly release tag')
+                if not isinstance(data.get('assets'), list):
+                    raise ValueError('Invalid upstream assets')
+                asset = next((x for x in data['assets'] if isinstance(x, dict)
+                              and isinstance(x.get('name'), str)
+                              and OPTISCALER_NIGHTLY_ASSET.fullmatch(x['name'])), None)
+                if (not asset or not isinstance(asset.get('digest'), str)
+                        or not re.fullmatch(r'sha256:[a-fA-F0-9]{64}', asset['digest'])):
+                    raise ValueError('Official OptiScaler Nightly release lacks a usable SHA256 asset digest')
+                match = OPTISCALER_NIGHTLY_ASSET.fullmatch(asset['name'])
+                release_version = f'{match.group(1)}+{match.group(2)}'
+                current = dict(version=release_version, tag=tag, asset_name=asset['name'],
+                               url=asset['browser_download_url'],
+                               sha256=asset['digest'][7:].lower(), size=asset['size'],
+                               checked_at=time.time(), etag=response.headers.get('ETag'),
+                               page=data['html_url'], error=None, metadata_policy=RELEASE_POLICY,
+                               metadata_source='github-api',
+                               asset_id=asset.get('id'), asset_updated_at=asset.get('updated_at'))
+                validate_optiscaler_nightly_release(current)
+                atomic_json(self.settings / 'optiscaler_nightly_release.json', current)
+                return current
+        except urllib.error.HTTPError as e:
+            if e.code == 304 and valid_cache:
+                old['checked_at'], old['error'] = time.time(), None
+                old.pop('failed_at', None)
+                atomic_json(self.settings / 'optiscaler_nightly_release.json', old)
+                return old
+            if e.code in (403, 429):
+                kind, retry_at = github_pause(e, now)
+                old.update(api_limit_kind=kind, api_retry_at=retry_at)
+                if kind == 'primary':
+                    return self._web_optiscaler_nightly_update(old, valid_cache, retry_at)
+                old['error'] = (f'GitHub returned HTTP {e.code}; '
+                                + ('its request limit is active. ' if kind == 'secondary'
+                                   else 'access to its update API was denied. ')
+                                + 'Retry later; reconnecting may not help.')
+            else:
+                old['error'] = f'GitHub returned HTTP {e.code}; retry later to check the latest OptiScaler Nightly release'
+        except (OSError, ValueError, TypeError, KeyError, http.client.HTTPException) as e:
+            old['error'] = str(e)
+        if not valid_cache:
+            old = {key: old[key] for key in ('error', 'api_retry_at', 'api_limit_kind') if key in old}
+        old['failed_at'] = time.time()
+        atomic_json(self.settings / 'optiscaler_nightly_release.json', old)
+        return old
+
+    def _web_optiscaler_nightly_update(self, old, valid_cache, retry_at):
+        now = time.time()
+        web_retry = old.get('web_retry_at')
+        if (type(web_retry) in (int, float) and math.isfinite(web_retry)
+                and now < web_retry <= now + 86400):
+            old.update(api_limit_kind='primary', api_retry_at=retry_at)
+            atomic_json(self.settings / 'optiscaler_nightly_release.json', old)
+            return old
+        try:
+            current = web_latest_optiscaler_nightly_release(context=https_context())
+            validate_optiscaler_nightly_release(current)
+            current.update(checked_at=time.time(), etag=None, error=None,
+                           metadata_policy=RELEASE_POLICY, metadata_source='github-web',
+                           api_limit_kind='primary', api_retry_at=retry_at)
+            atomic_json(self.settings / 'optiscaler_nightly_release.json', current)
+            return current
+        except (OSError, ValueError, TypeError, KeyError, http.client.HTTPException) as error:
+            failed = dict(old) if valid_cache else {}
+            now = time.time()
+            web_retry = now + 30
+            if isinstance(error, urllib.error.HTTPError) and error.code in (403, 429):
+                _, web_retry = github_pause(error, now)
+            failed.update(error=f'GitHub API request limit reached; official OptiScaler Nightly release verification failed: {error}',
+                          failed_at=now, api_limit_kind='primary', api_retry_at=retry_at,
+                          web_retry_at=web_retry)
+            atomic_json(self.settings / 'optiscaler_nightly_release.json', failed)
+            return failed
+
+    def preview_latest(self, gid, dx12_confirmed=False, variant_id=None, executable=None, route=None, optiscaler_channel=None):
         with self.lock:
             selected = select_variant(variant_id)
-            release = self.check_update()
+            release = self.check_variant_update(selected['id'])
             if release.get('error') or not release.get('version'):
                 raise ValueError(release.get('error') or 'Check upstream updates first')
             game = self.get_game(gid)
-            data = self.assess(game, executable=executable)
+            data = self.assess(game, executable=executable, route=route)
             if data['compatibility'] != 'candidate':
                 raise ValueError('; '.join(data['reasons']))
             self.validate_install_executable(data)
             if data['dx12_confirmation_needed'] and not dx12_confirmed:
                 raise ValueError('Confirm the game uses DirectX 12')
+            if data['route'] == 'optiscaler':
+                opti_entry = select_optiscaler_channel(
+                    data.get('installed_optiscaler_channel') if optiscaler_channel is None else optiscaler_channel
+                )
+                opti_channel = opti_entry['id']
+                if opti_channel == OPTISCALER_NIGHTLY_CHANNEL:
+                    opti_release = self.check_optiscaler_nightly_update()
+                    if opti_release.get('error') or not opti_release.get('version'):
+                        raise ValueError(opti_release.get('error') or 'Check OptiScaler Nightly updates first')
+                else:
+                    opti_release = None
+            else:
+                if optiscaler_channel not in (None, '', DEFAULT_OPTISCALER_CHANNEL):
+                    raise ValueError('OptiScaler build selection is only available for the OptiScaler route')
+                opti_entry = select_optiscaler_channel(DEFAULT_OPTISCALER_CHANNEL)
+                opti_channel = DEFAULT_OPTISCALER_CHANNEL
+                opti_release = None
             if data['legacy']:
                 # Existing native installations need the same original-file checks as explicit adoption.
                 self.previews.pop(self.preview(gid, 'adopt', dx12_confirmed)['token'], None)
             token = uuid.uuid4().hex
             self.previews[token] = dict(game=gid, action='latest', expires=time.time()+120,
                                        release=dict(release), variant_id=selected['id'],
+                                       optiscaler_channel=opti_channel,
+                                       optiscaler_release=dict(opti_release) if opti_release else None,
+                                       route=route if not data['managed'] else None,
                                        executable=data['selected_executable'] if not data['managed'] and data['route'] == 'optiscaler' else None,
                                        selected_executable=data['selected_executable'],
                                        dx12=dx12_confirmed,
                                        fingerprint=self.fingerprint(game, data, include_package=False))
+            is_fsr4 = is_fsr4_variant(selected['id'])
+            opti_desc = (f"OptiScaler Nightly ({opti_release['version']})"
+                         if opti_channel == OPTISCALER_NIGHTLY_CHANNEL and opti_release
+                         else 'OptiScaler 0.9.4')
+            if is_fsr4 and data['route'] == 'direct':
+                warning = ('Download the selected FSR 4.1.1 iGPU DLL and install or update it for this game '
+                           'via direct FidelityFX replacement. Originals are retained for disable/remove. '
+                           'Close the game. Frame generation is preserved.')
+            elif is_fsr4:
+                warning = (f'Download the selected FSR 4.1.1 iGPU DLL, prepare HelixSR + {opti_desc} and install '
+                           'HelixSR/my-fsr/amd_fidelityfx_upscaler_dx12.dll so you can switch between '
+                           'FSR HelixSR (3.1.5) and FSR 4.1.1 in the OptiScaler FFX Upscaler menu. '
+                           'Close the game. Frame generation is preserved.')
+            else:
+                warning = (f'Download required files, prepare the local network ({opti_desc}) and install or update HelixSR for this game. '
+                           if data['route'] == 'optiscaler' and opti_channel == OPTISCALER_NIGHTLY_CHANNEL else
+                           'Download required files, prepare the local network and install or update HelixSR for this game. '
+                           'Existing native HelixSR is imported first. Close the game. Frame generation is preserved.')
             return dict(token=token, name=game['name'], action='latest', route=data['route'],
                         selected_executable=data['selected_executable'],
                         model=selected['label'], variant_id=selected['id'], release_version=release['version'],
-                        files=self.planned_paths(game, data, 'latest'),
+                        optiscaler_channel=opti_channel if data['route'] == 'optiscaler' else None,
+                        optiscaler_label=opti_entry['label'] if data['route'] == 'optiscaler' else None,
+                        optiscaler_version=(opti_release['version'] if opti_release else '0.9.4') if data['route'] == 'optiscaler' else None,
+                        files=self.planned_paths(game, data, 'latest', variant_id=selected['id']),
                         select_upscaler='AMD FSR' if data['route'] == 'direct' else 'DLSS (or XeSS/FSR input)',
-                        warning='Download required files, prepare the local network and install or update HelixSR for this game. Existing native HelixSR is imported first. Close the game. Frame generation is preserved.')
+                        warning=warning)
 
     def execute_latest(self, token):
         with self.lock:
@@ -1146,23 +1652,34 @@ class Manager:
             self.previews.pop(token, None)
             return job
 
-    def start_job(self, kind, gid, preview=None):
+    def start_job(self, kind, gid, preview=None, optiscaler_channel=None):
         with self.lock:
             if self.worker and self.worker.is_alive():
                 raise ValueError('Another operation is running')
             game = self.get_game(gid)
             if kind not in ('prepare', 'install_latest'):
                 raise ValueError('Unsupported background operation')
-            release = load_release(self.settings)
+            selected = select_variant(preview.get('variant_id') if preview else None)
+            release = self.load_variant_release(selected['id'])
             if preview and not same_release(release, preview['release']):
                 raise ValueError('Upstream release changed since review; review Install or Update again')
-            selected = select_variant(preview.get('variant_id') if preview else None)
             if not self.cfg.get('license') or self.cfg.get('license') != license_key(release, selected['id']):
                 raise ValueError('Accept local network preparation terms first')
+            opti_channel = select_optiscaler_channel(
+                preview.get('optiscaler_channel') if preview else optiscaler_channel
+            )['id']
+            opti_release = None
+            if opti_channel == OPTISCALER_NIGHTLY_CHANNEL:
+                opti_release = load_optiscaler_nightly_release(self.settings)
+                if preview and preview.get('optiscaler_release') and not same_release(opti_release, preview['optiscaler_release']):
+                    raise ValueError('OptiScaler Nightly release changed since review; review Install or Update again')
             self.cancel.clear()
             job = {'id': uuid.uuid4().hex, 'kind': kind, 'game': game['name'], 'gid': gid, 'state': 'running',
                    'message': 'Starting', 'started_at': time.time(), 'log': '',
-                   'variant_id': selected['id'], 'reviewed_release': dict(release)}
+                   'variant_id': selected['id'], 'optiscaler_channel': opti_channel,
+                   'route': preview.get('route') if preview else None,
+                   'reviewed_release': dict(release),
+                   'reviewed_optiscaler_release': dict(opti_release) if opti_release else None}
             self.jobs[job['id']] = job
 
             def run():
@@ -1174,7 +1691,7 @@ class Manager:
                         if self.cancel.is_set():
                             raise ValueError('Cancelled before installation')
                         with self.lock:
-                            data = self.assess(game, executable=preview.get('executable'))
+                            data = self.assess(game, executable=preview.get('executable'), route=preview.get('route'))
                             if data['compatibility'] != 'candidate' or self.fingerprint(game, data, include_package=False) != preview['fingerprint']:
                                 raise ValueError('Game changed during preparation or is running. Close it and review again.')
                             job['message'] = 'Installing HelixSR and verifying game files'
@@ -1219,15 +1736,122 @@ class Manager:
     def prepare(self, game, job):
         if os.name == 'posix' and os.geteuid() == 0:
             raise ValueError('Refusing preparation as root')
-        release = self.check_update(True)
+        selected = select_variant(job.get('variant_id'))
+        release = self.check_variant_update(selected['id'], True)
         if release.get('error') or not release.get('version'):
             raise ValueError(release.get('error', 'Check upstream updates first'))
-        selected = select_variant(job.get('variant_id'))
         if self.cfg.get('license') != license_key(release, selected['id']):
             raise ValueError('Upstream release changed; review and accept its terms before preparation')
         if job.get('reviewed_release') and not same_release(release, job['reviewed_release']):
             raise ValueError('Upstream release changed since review; review Install or Update again')
-        cached = self.package(game, release=release, variant_id=selected['id'])
+        opti_channel = select_optiscaler_channel(job.get('optiscaler_channel'))['id']
+        target_route = job.get('route') or self.assess_safe(game, detailed=False).get('route')
+        opti_release = None
+        if opti_channel == OPTISCALER_NIGHTLY_CHANNEL and target_route != 'direct':
+            opti_release = self.check_optiscaler_nightly_update(True)
+            if opti_release.get('error') or not opti_release.get('version'):
+                raise ValueError(opti_release.get('error', 'Check OptiScaler Nightly updates first'))
+            if job.get('reviewed_optiscaler_release') and not same_release(opti_release, job['reviewed_optiscaler_release']):
+                raise ValueError('OptiScaler Nightly release changed since review; review Install or Update again')
+            cached_nightly = self.package(
+                game, route='optiscaler', release=release, variant_id=selected['id'],
+                optiscaler_channel=OPTISCALER_NIGHTLY_CHANNEL,
+            )
+            if (cached_nightly
+                    and cached_nightly[2].get('optiscaler_build', {}).get('release_sha256') == opti_release['sha256']):
+                job['message'] = 'Reusing the verified prepared package on this drive'
+                return cached_nightly
+        if is_fsr4_variant(selected['id']):
+            base_package = self._prepare_fsr4(game, job, release, selected)
+        else:
+            base_package = self._prepare_helixsr(game, job, release, selected)
+        if opti_channel == OPTISCALER_NIGHTLY_CHANNEL and target_route != 'direct':
+            return self._prepare_optiscaler_nightly(game, job, base_package, opti_release)
+        return base_package
+
+    def _prepare_optiscaler_nightly(self, game, job, base_package, opti_release):
+        companion = self.companion(game)
+        index_path = companion / 'records/packages-v1.json'
+        if self._symlink_in_path(index_path) or self._symlink_in_path(companion / 'packages'):
+            raise ValueError('Prepared package records cannot use symlink directories')
+        if index_path.exists() and (not index_path.is_file() or index_path.stat().st_size > 1 << 20):
+            raise ValueError('Prepared package index is unsafe or too large; review its installation records')
+        work = companion / 'staging' / ('opti-nightly-' + job['id'])
+        work.mkdir(parents=True, exist_ok=False)
+        archive = work / (opti_release.get('asset_name') or 'OptiScaler-nightly.7z')
+        job['message'] = 'Downloading official OptiScaler Nightly release'
+        try:
+            if shutil.disk_usage(companion).free < (512 << 20):
+                raise ValueError('At least 512 MiB free space is required for OptiScaler Nightly preparation')
+            with urllib.request.urlopen(
+                urllib.request.Request(opti_release['url'], headers={'User-Agent': 'HelixSR-Decky'}),
+                timeout=30, context=https_context(),
+            ) as response, archive.open('wb') as out:
+                size = 0
+                while True:
+                    if self.cancel.is_set():
+                        raise ValueError('Cancelled')
+                    chunk = response.read(1 << 20)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > opti_release['size']:
+                        raise ValueError('Release exceeds advertised size')
+                    out.write(chunk)
+            if size != opti_release['size'] or sha(archive) != opti_release['sha256']:
+                raise ValueError('OptiScaler Nightly SHA256 or size mismatch; check for updates and retry')
+            unpacked = work / 'unpacked'
+            safe_extract_7z(archive, unpacked)
+            archive.unlink()
+            build_meta, nightly_files = verify_optiscaler_nightly_archive(unpacked, opti_release)
+            api = pe_info(nightly_files['optiscaler/OptiScaler.dll'])
+            if api['arch'] != 'x64':
+                raise ValueError('Prepared OptiScaler Nightly DLL is not x64 Windows PE')
+            package = work / 'package'
+            package.mkdir(parents=True, exist_ok=True)
+            for rel, expected in base_package[2]['files'].items():
+                durable_copy(base_package[1] / rel, package / rel, expected)
+            for rel, src_path in nightly_files.items():
+                durable_copy(src_path, package / rel)
+            variant_meta = base_package[2].get('variant')
+            if valid_variant(variant_meta) and is_fsr4_variant(variant_meta['id']):
+                verify_fsr4_outputs(package)
+            else:
+                verify_outputs(package)
+            base_dir_name = base_package[1].name
+            final = companion / 'packages' / f"{base_dir_name}-opti-nightly-{opti_release['sha256'][:12]}"
+            final.parent.mkdir(parents=True, exist_ok=True)
+            if final.exists():
+                final = final.with_name(final.name + '-' + job['id'][:8])
+            os.replace(package, final)
+            payloads = tuple(dict.fromkeys(tuple(base_package[2]['files']) + tuple(nightly_files)))
+            for n in NETWORK:
+                if (final / n).is_file():
+                    (final / n).chmod(0o600)
+            record = dict(
+                version=base_package[2]['version'],
+                path=str(final),
+                release_sha256=base_package[2]['release_sha256'],
+                files={n: sha(final / n) for n in payloads},
+                prepared_at=time.time(),
+                variant=base_package[2]['variant'],
+                optiscaler_build=build_meta,
+            )
+            self.cfg.setdefault('variant_packages_v1', {})[str(final)] = record
+            self.save()
+            records = self.package_index(index_path)
+            if records is None and index_path.is_file():
+                durable_copy(index_path, index_path.with_name('packages-v1-corrupt-' + job['id'] + '.json'))
+            records = records or []
+            records = [r for r in records if self._package_record(r, game, companion)
+                       and r.get('path') != record['path']]
+            atomic_json(index_path, dict(schema=1, packages=(records + [record])[-256:]))
+            return version(record['version']), final, record
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    def _prepare_helixsr(self, game, job, release, selected):
+        cached = self.package(game, release=release, variant_id=selected['id'], optiscaler_channel=DEFAULT_OPTISCALER_CHANNEL)
         if cached:
             job['message'] = 'Reusing the verified prepared package on this drive'
             return cached
@@ -1357,6 +1981,94 @@ class Manager:
             # Work is exclusively owned by this job. Logs and successful package remain.
             shutil.rmtree(work, ignore_errors=True)
 
+    def _prepare_fsr4(self, game, job, release, selected):
+        target_route = job.get('route')
+        if not target_route:
+            target_route = self.assess_safe(game, detailed=False).get('route')
+        cached = self.package(game, route=target_route, release=release, variant_id=selected['id'], optiscaler_channel=DEFAULT_OPTISCALER_CHANNEL)
+        if cached:
+            job['message'] = 'Reusing the verified prepared package on this drive'
+            return cached
+        base_package = self.package(game, route='optiscaler', variant_id=DEFAULT_VARIANT, optiscaler_channel=DEFAULT_OPTISCALER_CHANNEL)
+        if not base_package and target_route != 'direct':
+            helix_release = self.check_update(True)
+            if helix_release.get('error') or not helix_release.get('version'):
+                raise ValueError('OptiScaler route with FSR 4 requires a prepared HelixSR base package on this drive; '
+                                 'prepare HelixSR first or check upstream updates')
+            base_package = self._prepare_helixsr(game, job, helix_release, select_variant(DEFAULT_VARIANT))
+        companion = self.companion(game)
+        index_path = companion / 'records/packages-v1.json'
+        if self._symlink_in_path(index_path) or self._symlink_in_path(companion / 'packages'):
+            raise ValueError('Prepared package records cannot use symlink directories')
+        if index_path.exists() and (not index_path.is_file() or index_path.stat().st_size > 1 << 20):
+            raise ValueError('Prepared package index is unsafe or too large; review its installation records')
+        work = companion / 'staging' / ('fsr4-' + job['id'])
+        work.mkdir(parents=True, exist_ok=False)
+        archive = work / 'fsr4-release.zip'
+        job['message'] = 'Downloading official FSR 4.1.1 iGPU release'
+        try:
+            if shutil.disk_usage(companion).free < (512 << 20):
+                raise ValueError('At least 512 MiB free space is required for FSR 4 preparation')
+            with urllib.request.urlopen(urllib.request.Request(release['url'], headers={'User-Agent': 'HelixSR-Decky'}), timeout=30, context=https_context()) as response, archive.open('wb') as out:
+                size = 0
+                while True:
+                    if self.cancel.is_set():
+                        raise ValueError('Cancelled')
+                    chunk = response.read(1 << 20)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > release['size']:
+                        raise ValueError('Release exceeds advertised size')
+                    out.write(chunk)
+            if size != release['size'] or sha(archive) != release['sha256']:
+                raise ValueError('Release SHA256 or size mismatch; upstream may have replaced the archive. Check for updates and retry')
+            unpacked = work / 'unpacked'
+            safe_extract(archive, unpacked)
+            archive.unlink()
+            model, dll_path = verify_fsr4_archive(unpacked, selected['id'])
+            api = pe_info(dll_path)
+            if api['arch'] != 'x64' or not api['ffx']:
+                raise ValueError('Prepared FSR 4 DLL has an unsupported installation interface')
+            package = work / 'package'
+            package.mkdir(parents=True, exist_ok=True)
+            if base_package:
+                for rel in PACKAGE_FILES:
+                    durable_copy(base_package[1] / rel, package / rel, base_package[2]['files'][rel])
+                fg_rel = 'amd-fsr/' + AMD_FG
+                if (base_package[1] / fg_rel).is_file() and fg_rel in base_package[2]['files']:
+                    durable_copy(base_package[1] / fg_rel, package / fg_rel, base_package[2]['files'][fg_rel])
+            durable_copy(dll_path, package / MY_FSR_DLL, model['recipe_sha256'])
+            atomic_json(package / 'helixsr_setup.json', dict(schema=1, model=model))
+            verify_fsr4_outputs(package)
+            final = companion / 'packages' / (selected['id'] + '-v' + release['version']
+                                              + '-' + release['sha256'][:12] + '-' + model['recipe_sha256'][:12])
+            final.parent.mkdir(parents=True, exist_ok=True)
+            if final.exists():
+                final = final.with_name(final.name + '-' + job['id'][:8])
+            os.replace(package, final)
+            payloads = (MY_FSR_DLL, 'helixsr_setup.json')
+            if all((final / n).is_file() for n in PACKAGE_FILES):
+                payloads = PACKAGE_FILES + payloads
+                if (final / 'amd-fsr' / AMD_FG).is_file():
+                    payloads += ('amd-fsr/' + AMD_FG,)
+                for n in NETWORK:
+                    (final / n).chmod(0o600)
+            record = dict(version=release['version'], path=str(final), release_sha256=release['sha256'],
+                          files={n: sha(final / n) for n in payloads}, prepared_at=time.time(), variant=model)
+            self.cfg.setdefault('variant_packages_v1', {})[str(final)] = record
+            self.save()
+            records = self.package_index(index_path)
+            if records is None and index_path.is_file():
+                durable_copy(index_path, index_path.with_name('packages-v1-corrupt-' + job['id'] + '.json'))
+            records = records or []
+            records = [r for r in records if self._package_record(r, game, companion)
+                       and r.get('path') != record['path']]
+            atomic_json(index_path, dict(schema=1, packages=(records + [record])[-256:]))
+            return version(record['version']), final, record
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
     @staticmethod
     def action_compatible(data, action):
         # An unsupported renderer can still restore owned originals. Any other
@@ -1365,7 +2077,7 @@ class Manager:
                 action in ('disable', 'remove') and data['compatibility'] == 'unsupported'
                 and data.get('renderer_unsupported') and data.get('managed'))
 
-    def preview(self, gid, action, dx12_confirmed=False, executable=None):
+    def preview(self, gid, action, dx12_confirmed=False, executable=None, route=None, optiscaler_channel=None):
         with self.lock:
             game = self.get_game(gid)
             if action not in ('install', 'update', 'enable', 'disable', 'remove', 'adopt', 'recover'):
@@ -1383,7 +2095,7 @@ class Manager:
                             files=list(saved.get('before', {})),
                             select_upscaler='previous configuration',
                             warning='Recover the interrupted transaction before any new installation.')
-            data = self.assess(game, executable=executable)
+            data = self.assess(game, executable=executable, route=route)
             rec = self.record(game)
             package = None
             if not self.action_compatible(data, action):
@@ -1399,8 +2111,16 @@ class Manager:
             if action in ('install', 'update', 'enable'):
                 if 'variant' in rec and not valid_variant(rec['variant']):
                     raise ValueError('Installed model identity needs review; use Update HelixSR with a supported model or remove it')
+                if 'optiscaler_build' in rec and not valid_optiscaler_build(rec.get('optiscaler_build')):
+                    raise ValueError('Installed OptiScaler build identity needs review; use Update HelixSR or remove it')
+                wanted_opti_channel = None
+                if data['route'] == 'optiscaler' and action != 'enable':
+                    wanted_opti_channel = select_optiscaler_channel(
+                        optiscaler_channel_of(rec) if optiscaler_channel is None and rec else optiscaler_channel
+                    )['id']
                 package = self.package(game, data['route'],
                                        variant_id=rec['variant']['id'] if valid_variant(rec.get('variant')) else None,
+                                       optiscaler_channel=wanted_opti_channel,
                                        selection=rec.get('package_selection') if action == 'enable' else None,
                                        installed=rec if action == 'enable' else None)
                 if not package:
@@ -1425,6 +2145,7 @@ class Manager:
             fingerprint = self.fingerprint(game, data, package=package)
             self.previews[token] = dict(game=gid, action=action, fingerprint=fingerprint,
                                        package_selection=package_selection(package[2]) if action in ('install', 'update', 'enable') else None,
+                                       route=route if not data['managed'] else None,
                                        executable=data['selected_executable'] if not data['managed'] and data['route'] == 'optiscaler' else None,
                                        selected_executable=data['selected_executable'],
                                        expires=time.time()+120, dx12=dx12_confirmed)
@@ -1452,9 +2173,10 @@ class Manager:
         rec = self.record(game)
         paths = list(rec['baseline']) if rec else self.planned_paths(game, data, 'observe')
         if data['route'] == 'optiscaler':
-            fg = str((Path(data['target']) / 'HelixSR' / AMD_FG).relative_to(Path(game['folder'])))
-            if fg not in paths:
-                paths.append(fg)
+            for extra in (AMD_FG, MY_FSR_DLL):
+                rel = str((Path(data['target']) / 'HelixSR' / extra).relative_to(Path(game['folder'])))
+                if rel not in paths:
+                    paths.append(rel)
         files = {}
         files['route'] = data['route']
         files['target'] = data.get('target')
@@ -1474,20 +2196,27 @@ class Manager:
             files['package_files'] = {n: sha(package[1] / n) for n in package[2]['files']}
         return hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
 
-    def planned_paths(self, game, data, action, package=AUTO_PACKAGE):
+    def planned_paths(self, game, data, action, package=AUTO_PACKAGE, variant_id=None):
         rec, root = self.record(game), Path(game['folder'])
         if package is AUTO_PACKAGE:
-            package = self.package(game, data['route'])
+            package = self.package(game, data['route'], variant_id=variant_id)
         if rec:
             paths = list(rec['baseline'])
-            if (action in ('install', 'update', 'enable', 'latest') and data['route'] == 'optiscaler'
-                    and (action == 'latest' or package and (package[1] / 'amd-fsr' / AMD_FG).is_file())):
-                path = str((Path(data['target']) / 'HelixSR' / AMD_FG).relative_to(root))
-                if path not in paths:
-                    target = checked_path(root, path)
-                    if target.exists() or target.is_symlink():
-                        raise ValueError('New upstream file conflicts with an unmanaged file: ' + path)
-                    paths.append(path)
+            if action in ('install', 'update', 'enable', 'latest') and data['route'] == 'optiscaler':
+                if action == 'latest' or package and (package[1] / 'amd-fsr' / AMD_FG).is_file():
+                    path = str((Path(data['target']) / 'HelixSR' / AMD_FG).relative_to(root))
+                    if path not in paths:
+                        target = checked_path(root, path)
+                        if target.exists() or target.is_symlink():
+                            raise ValueError('New upstream file conflicts with an unmanaged file: ' + path)
+                        paths.append(path)
+                if (action == 'latest' and is_fsr4_variant(variant_id)) or (package and (package[1] / MY_FSR_DLL).is_file()):
+                    path = str((Path(data['target']) / 'HelixSR' / MY_FSR_DLL).relative_to(root))
+                    if path not in paths:
+                        target = checked_path(root, path)
+                        if target.exists() or target.is_symlink():
+                            raise ValueError('New upstream file conflicts with an unmanaged file: ' + path)
+                        paths.append(path)
             return paths
         if data['route'] == 'direct':
             paths = []
@@ -1504,6 +2233,8 @@ class Manager:
             names += ['HelixSR/' + n for n in NETWORK]
             if action == 'latest' or package and (package[1] / 'amd-fsr' / AMD_FG).is_file():
                 names.append('HelixSR/' + AMD_FG)
+            if (action == 'latest' and is_fsr4_variant(variant_id)) or (package and (package[1] / MY_FSR_DLL).is_file()):
+                names.append('HelixSR/' + MY_FSR_DLL)
             return [str((target / n).relative_to(root)) for n in names]
         return []
 
@@ -1529,7 +2260,7 @@ class Manager:
                     raise ValueError('Wait for Steam download/update completion before recovery')
             self.rollback(game)
             return {'message': 'Interrupted transaction recovered'}
-        data = self.assess(game, executable=preview.get('executable'))
+        data = self.assess(game, executable=preview.get('executable'), route=preview.get('route'))
         rec = self.record(game)
         package = None
         if preview['action'] in ('install', 'update', 'enable'):
@@ -1624,6 +2355,14 @@ class Manager:
                     previous['variant'] = package[2]['variant']
                 else:
                     previous.pop('variant', None)
+                if data['route'] == 'optiscaler':
+                    previous['optiscaler_build'] = package[2].get('optiscaler_build') or dict(
+                        channel=DEFAULT_OPTISCALER_CHANNEL,
+                        label=select_optiscaler_channel(DEFAULT_OPTISCALER_CHANNEL)['label'],
+                        version='0.9.4',
+                    )
+                else:
+                    previous.pop('optiscaler_build', None)
                 previous['package_selection'] = package_selection(package[2])
                 previous['release_sha256'] = package[2].get('release_sha256')
                 # Extend older managed records for newly introduced dependencies.
@@ -1642,7 +2381,8 @@ class Manager:
                 atomic_json(self.record_path(game), previous)
             atomic_json(companion / 'records' / ('action-' + uuid.uuid4().hex + '.json'),
                         dict(action=action, route=data['route'], version=previous['version'],
-                             variant=previous.get('variant'), package_selection=previous.get('package_selection'),
+                             variant=previous.get('variant'), optiscaler_build=previous.get('optiscaler_build'),
+                             package_selection=previous.get('package_selection'),
                              verified=previous['current'], time=time.time()))
             journal.update(state='committed', committed_current=previous['current'],
                            committed_record=None if action == 'remove' else previous)
@@ -1712,6 +2452,9 @@ class Manager:
             p = checked_path(root, rel)
             if expected is None:
                 self.unlink_managed(p)
+                if p.parent.name == 'my-fsr':
+                    with contextlib.suppress(OSError):
+                        p.parent.rmdir()
             else:
                 src = companion / 'originals' / rel
                 if sha(src) != expected:
@@ -1758,6 +2501,9 @@ class Manager:
             p.with_name(p.name + '.helixsr-decky.tmp').unlink(missing_ok=True)
             if expected is None:
                 p.unlink(missing_ok=True)
+                if p.parent.name == 'my-fsr':
+                    with contextlib.suppress(OSError):
+                        p.parent.rmdir()
             else:
                 src = tx / 'snapshot' / rel
                 if sha(src) != expected:
@@ -1792,6 +2538,7 @@ class Manager:
     def install_payload(self, game, data, rec, package):
         root = Path(game['folder'])
         package_path, package_record = package[1], package[2]
+        is_fsr4 = valid_variant(package_record.get('variant')) and is_fsr4_variant(package_record['variant']['id'])
         if data['route'] == 'direct':
             for target in map(Path, rec['targets']):
                 rel = str(target.relative_to(root))
@@ -1799,9 +2546,14 @@ class Manager:
                 if sha(original) != rec['baseline'][rel]:
                     raise ValueError('Original FidelityFX DLL changed')
                 self.copy_atomic(original, target.with_name(target.stem + '.original.dll'))
-                self.copy_atomic(package_path / DLL, target, package_record['files'][DLL])
-                for name in NETWORK:
-                    self.copy_atomic(package_path / name, target.parent / name, package_record['files'][name])
+                if is_fsr4:
+                    self.copy_atomic(package_path / MY_FSR_DLL, target, package_record['files'][MY_FSR_DLL])
+                    for name in NETWORK:
+                        self.unlink_managed(target.parent / name)
+                else:
+                    self.copy_atomic(package_path / DLL, target, package_record['files'][DLL])
+                    for name in NETWORK:
+                        self.copy_atomic(package_path / name, target.parent / name, package_record['files'][name])
                 self.write_managed_json(target.parent / 'helixsr-install.json',
                             {'route': 'direct', 'owner': 'HelixSR Decky', 'helixsr': rec.get('version'),
                              'variant': rec.get('variant'), 'package_selection': rec.get('package_selection')})
@@ -1814,12 +2566,12 @@ class Manager:
             template = settings_bytes.decode('utf-8')
             source = self.retained_config(rec, str((target / 'OptiScaler.ini').relative_to(root)))
             source = template if source is None else source
-            settings = [('Dx12Upscaler', 'fsr31'),
+            from optiscaler_setup import default_dx12_upscaler, pin_config
+            settings = [('Dx12Upscaler', default_dx12_upscaler(template)),
                         ('FfxDx12Path', 'Z:' + str(target / 'HelixSR/helixsr.dll').replace('/', '\\')),
                         ('FfxDx12SRPath', 'Z:' + str(target / 'HelixSR/helixsr_upscaler.dll').replace('/', '\\'))]
             if (package_path / 'amd-fsr' / AMD_FG).is_file():
                 settings.append(('FfxDx12FGPath', 'Z:' + str(target / 'HelixSR' / AMD_FG).replace('/', '\\')))
-            from optiscaler_setup import pin_config
             configured_source = pin_config(source, template, settings)
             for source, dest in [('optiscaler/OptiScaler.dll', 'dxgi.dll'),
                                  ('optiscaler/fakenvapi.dll', 'fakenvapi.dll'),
@@ -1845,7 +2597,15 @@ class Manager:
             if (package_path / 'amd-fsr' / AMD_FG).is_file():
                 name = 'amd-fsr/' + AMD_FG
                 self.copy_atomic(package_path / name, target / 'HelixSR' / AMD_FG, package_record['files'][name])
+            my_fsr_target = target / 'HelixSR' / MY_FSR_DLL
+            if is_fsr4 and (package_path / MY_FSR_DLL).is_file():
+                self.copy_atomic(package_path / MY_FSR_DLL, my_fsr_target, package_record['files'][MY_FSR_DLL])
+            elif str(my_fsr_target.relative_to(root)) in rec.get('baseline', {}):
+                self.unlink_managed(my_fsr_target)
+                with contextlib.suppress(OSError):
+                    my_fsr_target.parent.rmdir()
             self.write_managed(target / 'OptiScaler.ini', configured_source)
             self.write_managed_json(target / 'HelixSR/helixsr-install.json',
                         {'route': 'optiscaler', 'owner': 'HelixSR Decky', 'helixsr': rec.get('version'),
-                         'variant': rec.get('variant'), 'package_selection': rec.get('package_selection')})
+                         'variant': rec.get('variant'), 'optiscaler_build': rec.get('optiscaler_build'),
+                         'package_selection': rec.get('package_selection')})

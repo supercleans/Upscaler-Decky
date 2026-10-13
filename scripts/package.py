@@ -6,10 +6,10 @@ import sys
 import zipfile
 root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root / 'py_modules'))
-from plugin_updates import semver, validate_zip
+from plugin_updates import FOLDER, semver, validate_zip
 version = json.loads((root / 'package.json').read_text())['version']
 semver(version)
-out = root.parent / f'HelixSR-Decky-{version}.zip'
+out = root.parent / f'{FOLDER}-{version}.zip'
 allowed = ['main.py', 'plugin.json', 'package.json', 'LICENSE', 'README.md', 'INSTALL_GUIDE.md', 'OPTISCALER_GUIDE.md', 'DESKTOP_GUIDE.md', 'STATUS_GUIDE.md', 'MODEL_VARIANTS.md', 'THIRD_PARTY_NOTICES.md']
 license_files = [
     'licenses/cpython-3.11.17-LICENSE.txt',
@@ -35,7 +35,7 @@ if not (root / 'dist/index.js').is_file():
     raise SystemExit('Build frontend first')
 with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
     for p in sorted(files):
-        z.write(p, 'HelixSR-Decky/' + p.relative_to(root).as_posix())
+        z.write(p, f'{FOLDER}/' + p.relative_to(root).as_posix())
 validate_zip(out, version)
 digest = hashlib.sha256(out.read_bytes()).hexdigest()
 out.with_suffix('.zip.sha256').write_text(f'{digest}  {out.name}\n')
