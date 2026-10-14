@@ -9,6 +9,7 @@ import { canRestore, gameStatus, installReadiness } from "./gameStatus";
 import { librarySelectable } from "./libraryStatus";
 import { koGameUnavailableExplanation, koInstallReason, koIssueStep, koIssueTitle, koReason, koStatusLabel, koStatusSummary } from "./i18nKo";
 import { InstallSession, JobTracker } from "./installSession";
+import { readLaunchOptions } from "./launchDetails";
 
 declare const DeckyBackend: { callable: <A extends unknown[], R>(route: string) => (...args: A) => Promise<R>;
   addEventListener?: (event: string, listener: (...args: any[]) => void) => unknown;
@@ -121,13 +122,7 @@ const finalizeLaunch = callable<[string, string, string], unknown>("finalize_lau
 const ownedLaunch = callable<[string, string], { before: string; after: string; pending?: LaunchIntent } | null>("owned_launch_options");
 
 async function liveLaunchOptions(appid: number): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => { subscription?.unregister(); reject(new Error("Steam에서 실시간 시작 옵션을 가져오지 못했습니다")); }, 5000);
-    let subscription: { unregister(): void } | undefined;
-    subscription = SteamClient.Apps.RegisterForAppDetails(appid, detail => {
-      clearTimeout(timer); subscription?.unregister(); resolve(detail.strLaunchOptions);
-    });
-  });
+  return readLaunchOptions(listener => SteamClient.Apps.RegisterForAppDetails(appid, listener));
 }
 
 let lastSelected = "";
