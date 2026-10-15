@@ -6,8 +6,11 @@
 
 ## 1. 프로젝트 개요 및 베이스라인
 
-- **플러그인 명칭**: `Upscaler-Decky` (`package.json`: `upscaler-decky`, 버전 `0.1.28`)
-- **업스트림 베이스**: `dawoodtogoo2020-code/HelixSR-Decky` `v0.1.21` (`a3c0d21`) 병합 완료 (패널 재마운트 시 설치 확인 및 진행 상태 보존)
+- **플러그인 명칭**: `Upscaler-Decky` (`package.json`: `upscaler-decky`, 버전 `0.1.29`)
+- **업스트림 베이스**: `dawoodtogoo2020-code/HelixSR-Decky` `v0.1.23` (`4564805`) 병합 완료
+  - **HelixSR 1.8.1 공식 교체 레시피 검증**: 업스트림에서 갱신된 HelixSR 1.8.1 릴리즈 아카이브의 변경된 변환 스크립트 해시(`93930e...`)를 검증 테이블에 추가하여 설치 중단 에러 방지
+  - **Steam 시작 옵션 콜백 멈춤 해결 (`src/launchDetails.ts`)**: OptiScaler 시작 옵션 등록 시 Steam 클라이언트의 비동기 콜백 누락/지연으로 인한 UI 무한 대기 버그 해결 (타임아웃 및 안전 구독 해제)
+  - **Decky 플러그인 안전 종료 및 4초 예산 준수 (`py_modules/plugin_shutdown.py`)**: 언로드 시 Decky의 5초 강제 종료 데드라인 이전에 컴파일러 세션(`killpg`) 및 모니터를 4초 이내로 안전 정리하여 프로세스 및 파일 손상 방지
 - **핵심 확장 목표**:
   1. **UI 레이아웃 대폭 간소화 및 불필요한 메뉴 정리 (`src/index.tsx`)**:
      - 사용자 피드백을 반영하여 불필요한 3개 메뉴 섹션(`게임 가져오기`, `고급 옵션 및 세부 진단`, `업스케일러 버전 및 가이드`)을 완전 제거
